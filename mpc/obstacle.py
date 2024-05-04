@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, cast
+from typing import cast
 
 import casadi as ca
 import numpy as np
@@ -12,11 +12,13 @@ class Obstacle(ABC):
         self,
         id: int,
         geometry: Geometry,
-        position: Tuple[float, float],
-        orientation: float = 90,
     ):
         self.id = id
         self.geometry = geometry
+
+    @property
+    def state(self):
+        return self.geometry.location
 
     @abstractmethod
     def calculate_matrix_distance(self, states_matrix: np.ndarray):
@@ -27,10 +29,10 @@ class Obstacle(ABC):
         raise NotImplementedError
 
     def calculate_distance(self, state: np.ndarray):
-        return self.geometry.calculate_distance(state, self.state)
+        return self.geometry.calculate_distance(state)
 
     def calculate_symbolic_distance(self, symbolic_state: ca.MX):
-        return self.geometry.calculate_symbolic_distance(symbolic_state, self.state)
+        return self.geometry.calculate_symbolic_distance(symbolic_state)
 
 
 class StaticObstacle(Obstacle):
@@ -38,20 +40,12 @@ class StaticObstacle(Obstacle):
         self,
         id: int,
         geometry: Geometry,
-        position: Tuple[float, float],
-        orientation: float = np.pi / 2,
     ):
-        super().__init__(
-            id=id, geometry=geometry, position=position, orientation=orientation
-        )
-        self.state = np.array([*position, orientation])
+        super().__init__(id=id, geometry=geometry)
 
     def calculate_matrix_distance(self, states_matrix: np.ndarray):
         return np.stack(
-            [
-                self.geometry.calculate_distance(state, self.state)
-                for state in states_matrix.T
-            ]
+            [self.geometry.calculate_distance(state) for state in states_matrix.T]
         )
 
     def calculate_symbolic_matrix_distance(self, symbolic_states_matrix: ca.MX):
@@ -60,7 +54,7 @@ class StaticObstacle(Obstacle):
             ca.vertcat(
                 *[
                     self.geometry.calculate_symbolic_distance(
-                        symbolic_states_matrix[:, time_step], self.state
+                        symbolic_states_matrix[:2, time_step]
                     )
                     for time_step in range(symbolic_states_matrix.shape[1])
                 ]

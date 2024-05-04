@@ -5,13 +5,13 @@ This module is created in a separate file to prevent circular imports. Will be r
 from typing import Tuple
 
 from mpc.agent import Agent
-from mpc.geometry import Circle
 
 
 class ShadowAgent(Agent):
     def __init__(
         self,
         id: int,
+        radius: float,
         initial_position: Tuple[float, float],
         initial_orientation: float,
         goal_position: Tuple[float, float],
@@ -20,7 +20,6 @@ class ShadowAgent(Agent):
         initial_linear_velocity: float = 0,
         initial_angular_velocity: float = 0,
         horizon: int = 50,
-        geometry: Circle = Circle(1),
         linear_velocity_bounds: Tuple[float, float] = (0, 12),
         angular_velocity_bounds: Tuple[float, float] = (-0.78, 0.78),
         linear_acceleration_bounds: Tuple[float, float] = (-5, 5),
@@ -30,6 +29,7 @@ class ShadowAgent(Agent):
     ):
         super().__init__(
             id=id,
+            radius=radius,
             initial_position=initial_position,
             initial_orientation=initial_orientation,
             goal_position=goal_position,
@@ -38,7 +38,6 @@ class ShadowAgent(Agent):
             initial_linear_velocity=initial_linear_velocity,
             initial_angular_velocity=initial_angular_velocity,
             horizon=horizon,
-            geometry=geometry,
             sensor_radius=0,
             avoid_obstacles=False,
             linear_velocity_bounds=linear_velocity_bounds,
@@ -66,6 +65,6 @@ class ShadowAgent(Agent):
             linear_acceleration_bounds=self.linear_acceleration_bounds,
             angular_acceleration_bounds=self.angular_acceleration_bounds,
         )
-
+        self.geometry.location = self.state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
         self.angular_velocity += self.controls_matrix[1, 0] * self.time_step

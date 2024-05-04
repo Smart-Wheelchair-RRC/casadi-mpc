@@ -1,0 +1,34 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/radtop/rrc_turtlebot_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/demo_mapping/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/DynamixelSDK/ros/dynamixel_sdk/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/local_nav_ros/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/pedsim_ros/3rdparty/libpedsim/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/pedsim_ros/pedsim_sensors/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/pedsim_ros/pedsim_simulator/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/pedsim_ros/pedsim_utils/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/pedsim_ros/pedsim_visualizer/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/navigation_layers/range_sensor_layer/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/navigation_layers/social_navigation_layers/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/turtlebot3_simulations/turtlebot3_fake/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/turtlebot3_simulations/turtlebot3_gazebo/include/**",
+        "/home/radtop/rrc_turtlebot_ws/src/turtlebot3/turtlebot3_slam/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

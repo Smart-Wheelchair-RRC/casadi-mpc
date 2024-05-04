@@ -1,13 +1,13 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # import numpy as np
 from matplotlib import pyplot as plt
 
 from mpc.agent import EgoAgent
-from mpc.dynamic_obstacle import DynamicObstacle
+from mpc.dynamic_obstacle import SimulatedDynamicObstacle
 from mpc.obstacle import StaticObstacle
 
 
@@ -16,7 +16,8 @@ class Plotter:
         self,
         agent: EgoAgent,
         static_obstacles: List[StaticObstacle],
-        dynamic_obstacles: List[DynamicObstacle],
+        dynamic_obstacles: List[SimulatedDynamicObstacle],
+        waypoints: List[Tuple[float, float]],
         video_path: Optional[Path] = None,
     ):
         self.agent = agent
@@ -36,35 +37,36 @@ class Plotter:
 
         axes.set_aspect("equal")
 
-        self.patches = []
-
-        if self.agent.geometry.patch.figure is None:
-            axes.add_patch(self.agent.geometry.patch)
-        agent.geometry.update_patch(self.agent.state)
+        self.agent_patch = axes.add_patch(self.agent.geometry.create_patch())
 
         # add agent id to plot
         self.agent_id = axes.text(
             self.agent.state[0],
             self.agent.state[1],
-            f"Agent {self.agent.id}",
+            f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})",
             fontsize=12,
             color="black",
         )
 
-        for obstacle in self.obstacles:
-            if obstacle.geometry.patch.figure is None:
-                axes.add_patch(obstacle.geometry.patch)
-            obstacle.geometry.update_patch(obstacle.state)
+        self.obstacle_patches = []
+
+        for obstacle in self.dynamic_obstacles:
+            self.obstacle_patches.append(
+                axes.add_patch(obstacle.geometry.create_patch())
+            )
+
+        for obstacle in self.static_obstacles:
+            axes.add_patch(obstacle.geometry.create_patch())
 
         self.static_obstacle_ids = [
-            axes.text(
-                obstacle.state[0],
-                obstacle.state[1],
-                f"Obstacle {obstacle.id}",
-                fontsize=12,
-                color="black",
-            )
-            for obstacle in self.static_obstacles
+            # axes.text(
+            #     obstacle.state[0],
+            #     obstacle.state[1],
+            #     f"Obstacle {obstacle.id}",
+            #     fontsize=12,
+            #     color="black",
+            # )
+            # for obstacle in self.static_obstacles
         ]
 
         self.dynamic_obstacle_ids = [
@@ -82,9 +84,13 @@ class Plotter:
             self.agent.goal_state[0], self.agent.goal_state[1], marker="x", color="r"
         )[0]
 
+        self.final_goal_plot = axes.plot(
+            self.agent.goal_state[0], self.agent.goal_state[1], marker="x", color="g"
+        )[0]
+
         self.states_plot = axes.plot(
-            self.agent.states_matrix[0, 1:],
-            self.agent.states_matrix[1, 1:],
+            self.agent.states_matrix[0, 1:] ,
+            self.agent.states_matrix[1, 1:] ,
             marker=".",
             color="blue",
             # s=1.5,
@@ -117,11 +123,35 @@ class Plotter:
         ]
 
         self.goal_plot.set_data(self.agent.goal_state[0], self.agent.goal_state[1])
+        # self.final_goal_plot.set_data(waypoints[-1][0], waypoints[-1][1])
 
+        self.goal_plot_text = axes.text(
+            self.agent.goal_state[0],
+            self.agent.goal_state[1],
+            f"({self.agent.goal_state[0]:.2f}, {self.agent.goal_state[1]:.2f})",
+            fontsize=12,
+            color="black",
+        )
+        self.final_goal_plot_text = axes.text(
+            self.agent.goal_state[0],
+            self.agent.goal_state[1],
+            f"({self.agent.goal_state[0]:.2f}, {self.agent.goal_state[1]:.2f})",
+            fontsize=12,
+            color="black",
+        )
         self.recenter_plot()
 
-    def update_goal(self):
+    def update_goal(self, waypoints):
         self.goal_plot.set_data(self.agent.goal_state[0], self.agent.goal_state[1])
+        self.goal_plot_text.set_position(
+            (self.agent.goal_state[0], self.agent.goal_state[1])
+        )
+        self.goal_plot_text.set_text(
+            f"({self.agent.goal_state[0]:.2f}, {self.agent.goal_state[1]:.2f})"
+        )
+        if len(waypoints) > 0:
+            self.final_goal_plot.set_data(waypoints[-1][0], waypoints[-1][1])
+            self.final_goal_plot_text.set_position((waypoints[-1][0], waypoints[-1][1]))
 
     @property
     def obstacles(self):
@@ -130,32 +160,35 @@ class Plotter:
     def recenter_plot(self):
         # Center plot to agent
         axes = plt.gca()
-        axes.set_xlim(self.agent.state[0] - 10, self.agent.state[0] + 10)
-        axes.set_ylim(self.agent.state[1] - 10, self.agent.state[1] + 10)
+        axes.set_xlim(self.agent.state[0] - 5, self.agent.state[0] + 5)
+        axes.set_ylim(self.agent.state[1] - 5, self.agent.state[1] + 5)
 
     def save_frame(self):
         # Save frame to video
         plt.gcf().savefig(self.video_path / f"frame_{(self.num_frames + 1):04d}.png")
 
-    def update_plot(self):
+    def update_plot(self, waypoint):
         # Plot using matplotlib
         plt.pause(0.01)
 
         self.recenter_plot()
 
-        self.agent.geometry.update_patch(self.agent.state)
+        self.agent.geometry.update_patch(self.agent_patch)
 
         self.agent_id.set_position((self.agent.state[0], self.agent.state[1]))
+        self.agent_id.set_text(
+            f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})"
+        )
 
         for index, obstacle in enumerate(self.dynamic_obstacles):
             self.dynamic_obstacle_ids[index].set_position(
                 (obstacle.state[0], obstacle.state[1])
             )
-            obstacle.geometry.update_patch(obstacle.state)
+            obstacle.geometry.update_patch(self.obstacle_patches[index])
 
         self.states_plot.set_data(
-            self.agent.states_matrix[0, 1:], self.agent.states_matrix[1, 1:]
-        )
+            self.agent.states_matrix[0, 1:] , self.agent.states_matrix[1, 1:]
+            )
 
         for obstacle_plot, obstacle in zip(
             self.dynamic_obstacle_plots, self.dynamic_obstacles
@@ -171,7 +204,7 @@ class Plotter:
                 obstacle.states_matrix[1, 1:],
             )
 
-        self.update_goal()
+        self.update_goal(waypoint)
 
         if self.video_path:
             self.save_frame()
@@ -199,6 +232,24 @@ class Plotter:
         for file in os.listdir(self.video_path):
             if file.endswith(".png"):
                 os.remove(os.path.join(self.video_path, file))
+
+    def update_static_obstacles(self, static_obstacles):
+        self.static_obstacles = static_obstacles
+        # Remove old patches
+        for patch in self.obstacle_patches:
+            patch.remove()
+        self.obstacle_patches = []
+
+        for obstacle in self.static_obstacles:
+            self.obstacle_patches.append(
+                plt.gca().add_patch(obstacle.geometry.create_patch())
+            )
+
+        for index, obstacle in enumerate(self.static_obstacles):
+            # self.static_obstacle_ids[index].set_position(
+            #     (obstacle.state[0], obstacle.state[1])
+            # )
+            obstacle.geometry.update_patch(self.obstacle_patches[index])
 
     def close(self):
         plt.pause(2)

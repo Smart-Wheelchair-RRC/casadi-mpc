@@ -30,9 +30,7 @@ def DM_vertcat(*args: ca.DM) -> ca.DM:
     return ca.vertcat(*args)
 
 
-def create_symbolic_scalar(
-    name: str, size: Optional[Tuple[int, int] | int] = None
-) -> ca.SX:
+def create_symbolic_scalar(name: str, size: Optional[Tuple[int, int]] = None) -> ca.SX:
     return ca.SX.sym(name, size) if size else ca.SX.sym(name)
 
 

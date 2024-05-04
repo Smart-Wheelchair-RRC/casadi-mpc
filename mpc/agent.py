@@ -12,6 +12,7 @@ class Agent(ABC):
     def __init__(
         self,
         id: int,
+        radius: float,
         initial_position: Tuple[float, float],
         initial_orientation: float,
         planning_time_step: float,
@@ -19,21 +20,20 @@ class Agent(ABC):
         initial_angular_velocity: float,
         horizon: int,
         sensor_radius: float,
-        geometry: Circle,
         avoid_obstacles: bool,
         linear_velocity_bounds: Tuple[float, float],
         angular_velocity_bounds: Tuple[float, float],
         linear_acceleration_bounds: Tuple[float, float],
         angular_acceleration_bounds: Tuple[float, float],
         left_right_lane_bounds: Tuple[float, float],
-        goal_position: Tuple[float, float] | None = None,
-        goal_orientation: float | None = None,
+        goal_position: Tuple[float, float] = None,
+        goal_orientation: float = None,
         use_warm_start: bool = False,
     ):
         assert horizon > 0, "Horizon must be greater than 0"
 
         self.id = id
-        self.geometry = geometry
+        self.geometry = Circle(center=initial_position, radius=radius)
         self.sensor_radius = sensor_radius
 
         self.avoid_obstacles = avoid_obstacles
@@ -73,8 +73,8 @@ class Agent(ABC):
 
         self.use_warm_start = use_warm_start
 
-    def update_goal(self, goal_position: Tuple[float, float], goal_orientation: float):
-        self.goal_state = np.array([*goal_position, goal_orientation])
+    def update_goal(self, goal: np.ndarray):
+        self.goal_state = goal if (goal is not None) else self.initial_state
 
     @property
     def state(self):
@@ -86,7 +86,7 @@ class Agent(ABC):
 
     @property
     def at_goal(self):
-        return self.geometry.calculate_distance(self.state, self.goal_state) - 1 <= 0
+        return self.geometry.calculate_distance(self.goal_state) - 0.1 <= 0
 
     def reset(self, matrices_only: bool = False, to_initial_state: bool = True):
         self.states_matrix = np.tile(
@@ -103,25 +103,26 @@ class EgoAgent(Agent):
     def __init__(
         self,
         id: int,
+        radius: float,
         initial_position: Tuple[float, float],
         initial_orientation: float,
         planning_time_step: float = 0.041,
         initial_linear_velocity: float = 0,
         initial_angular_velocity: float = 0,
         horizon: int = 50,
-        geometry: Circle = Circle(1),
-        sensor_radius: float = 10,
+        sensor_radius: float = 5,
         linear_velocity_bounds: Tuple[float, float] = (0, 12),
         angular_velocity_bounds: Tuple[float, float] = (-0.78, 0.78),
         linear_acceleration_bounds: Tuple[float, float] = (-5, 5),
         angular_acceleration_bounds: Tuple[float, float] = (-10, 10),
         left_right_lane_bounds: Tuple[float, float] = (-1000, 1000),
-        goal_position: Tuple[float, float] | None = None,
-        goal_orientation: float | None = None,
+        goal_position: Tuple[float, float] = None,
+        goal_orientation: float = None,
         use_warm_start: bool = False,
     ):
         super().__init__(
             id=id,
+            radius=radius,
             initial_position=initial_position,
             initial_orientation=initial_orientation,
             goal_position=goal_position,
@@ -130,7 +131,6 @@ class EgoAgent(Agent):
             initial_linear_velocity=initial_linear_velocity,
             initial_angular_velocity=initial_angular_velocity,
             horizon=horizon,
-            geometry=geometry,
             sensor_radius=sensor_radius,
             avoid_obstacles=True,
             linear_velocity_bounds=linear_velocity_bounds,
@@ -144,7 +144,6 @@ class EgoAgent(Agent):
     def step(self, obstacles: Optional[List[Obstacle]] = None):
         if not self.use_warm_start:
             self.reset(matrices_only=True, to_initial_state=False)
-
         self.states_matrix, self.controls_matrix = self.planner.solve(
             current_state=self.state,
             current_linear_velocity=self.linear_velocity,
@@ -157,9 +156,9 @@ class EgoAgent(Agent):
             angular_velocity_bounds=self.angular_velocity_bounds,
             linear_acceleration_bounds=self.linear_acceleration_bounds,
             angular_acceleration_bounds=self.angular_acceleration_bounds,
-            inflation_radius=(self.geometry.radius + 0.35),
+            inflation_radius=(self.geometry.radius + 0.1),
             obstacles=obstacles if self.avoid_obstacles else None,
         )
-
+        self.geometry.location = self.state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
         self.angular_velocity += self.controls_matrix[1, 0] * self.time_step
