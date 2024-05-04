@@ -115,7 +115,7 @@ class EgoAgent(Agent):
         angular_velocity_bounds: Tuple[float, float] = (-0.78, 0.78),
         linear_acceleration_bounds: Tuple[float, float] = (-5, 5),
         angular_acceleration_bounds: Tuple[float, float] = (-10, 10),
-        left_right_lane_bounds: Tuple[float, float] = (-1000, 1000),
+        left_right_lane_bounds: Tuple[float, float] = (-10, 10),
         goal_position: Tuple[float, float] = None,
         goal_orientation: float = None,
         use_warm_start: bool = False,
