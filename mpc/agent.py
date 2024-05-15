@@ -142,6 +142,7 @@ class EgoAgent(Agent):
         )
 
     def step(self, obstacles: Optional[List[Obstacle]] = None):
+        print("Num Obstacles:", len(obstacles))
         if not self.use_warm_start:
             self.reset(matrices_only=True, to_initial_state=False)
         self.states_matrix, self.controls_matrix = self.planner.solve(

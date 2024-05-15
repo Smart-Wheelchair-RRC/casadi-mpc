@@ -72,7 +72,7 @@ class ROSInterface:
         #     StaticObstacle(id=i, geometry=Polygon(vertices=vertices))
         #     for i, vertices in enumerate(polygons)
         # ]
-        self.polygon_obstacles = [
+        self.static_obstacles = [
             # StaticObstacle(id=1, geometry=Circle(center=(-1, 1), radius=0.2)),
         ]
 
@@ -83,9 +83,10 @@ class ROSInterface:
         # Changes
         # self.environment.static_obstacles = self.polygon_obstacles
         # self.environment.plotter.update_static_obstacles(self.polygon_obstacles)
-        print("hello")
+        # print("hello")
 
         while not rospy.is_shutdown():
+            self.environment.static_obstacles = self.static_obstacles
             self.environment.step()
             # print(self.environment.agent.goal_state, self.environment.agent.state)
             
@@ -197,25 +198,7 @@ class ROSInterface:
                 )
             )
         # print(self.environment.static_obstacles == static_obstacle_list)
-        self.environment.static_obstacles = static_obstacle_list
-        self.environment.step()
-        # print(self.environment.agent.goal_state, self.environment.agent.state)
-        # print(
-        #     "Velocity",
-        #     self.environment.agent.linear_velocity,
-        #     self.environment.agent.angular_velocity,
-        # )
-        self.future_states_pub()
-
-        # Publish the control command
-        control_command = Twist()
-        control_command.linear.x = self.environment.agent.linear_velocity
-        control_command.angular.z = self.environment.agent.angular_velocity
-        print(control_command.linear.x, control_command.angular.z)
-
-        self.velocity_publisher.publish(control_command)
-        # print(len(self.environment.static_obstacles))
-        # self.environment.plotter.update_static_obstacles(static_obstacle_list)
+        self.static_obstacles = static_obstacle_list
 
     def people_callback(self, message: People):
         # Create a dynamic obstacle for each person

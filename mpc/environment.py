@@ -164,6 +164,7 @@ class ROSEnvironment(Environment):
                 <= self.agent.sensor_radius
             ]
         )
+        print("Rollout time ", time.perf_counter() - t1)
 
         if self.plot:
             self.plotter.update_plot(self.waypoints)
@@ -172,7 +173,6 @@ class ROSEnvironment(Environment):
             print("Reached waypoint", self.waypoint_index + 1)
             self.waypoint_index += 1
             self.agent.update_goal(self.current_waypoint)
-        print("Rollout time ",time.perf_counter() - t1)
 
     def reset(self):
         self.agent.reset()
