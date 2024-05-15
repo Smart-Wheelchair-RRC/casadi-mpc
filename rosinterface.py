@@ -80,7 +80,7 @@ class ROSInterface:
 
     def run(self):
         rate = rospy.Rate(100)
-
+        # Changes
         # self.environment.static_obstacles = self.polygon_obstacles
         # self.environment.plotter.update_static_obstacles(self.polygon_obstacles)
         print("hello")
@@ -141,7 +141,7 @@ class ROSInterface:
         # control_command.angular.z = self.environment.agent.angular_velocity
         # print(control_command.linear.x, control_command.angular.z)
         # self.velocity_publisher.publish(control_command)
-
+        # print(len(self.environment.static_obstacles))
     def future_states_pub(self):
         marker_array = MarkerArray()
         future_states = self.environment.agent.states_matrix
