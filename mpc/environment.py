@@ -155,6 +155,7 @@ class ROSEnvironment(Environment):
             )
 
     def step(self):
+        t1 = time.perf_counter()
         self.agent.step(
             obstacles=[
                 obstacle
@@ -171,6 +172,7 @@ class ROSEnvironment(Environment):
             print("Reached waypoint", self.waypoint_index + 1)
             self.waypoint_index += 1
             self.agent.update_goal(self.current_waypoint)
+        print("Rollout time ",time.perf_counter() - t1)
 
     def reset(self):
         self.agent.reset()

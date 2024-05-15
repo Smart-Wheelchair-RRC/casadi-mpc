@@ -162,3 +162,4 @@ class EgoAgent(Agent):
         self.geometry.location = self.state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
         self.angular_velocity += self.controls_matrix[1, 0] * self.time_step
+        print("Obstacles",len(obstacles))

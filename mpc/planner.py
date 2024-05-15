@@ -63,7 +63,7 @@ class MotionPlanner:
         self.num_controls = cast(int, self.symbolic_controls.numel())
 
         # Weight matrix for goal cost
-        self.weight_matrix = ca.DM(ca.diagcat(100, 100, 0))
+        self.weight_matrix = ca.DM(ca.diagcat(100, 100, 500))
 
         # Obstacle cost weight
         # self.obstacle_cost_weight = ca.DM(10000)
