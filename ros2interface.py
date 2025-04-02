@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 from typing import List, cast
-from visualization_msgs.msg import Marker, MarkerArray
+
 import numpy as np
-import rospy
-from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
-from geometry_msgs.msg import Point32, PoseWithCovariance, Twist, PoseStamped, Pose
-from leg_tracker.msg import PeopleVelocity, PersonVelocity
+import open3d as o3d
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
+import rclpy.time
+
+# TF2 imports
+import tf2_ros
+from tf2_ros import Buffer, TransformListener
+
+from geometry_msgs.msg import Point32, Pose, PoseStamped, PoseWithCovariance, Twist
 from nav_msgs.msg import Odometry, Path
-from people_msgs.msg import People, Person
-from tf.transformations import euler_from_quaternion
+from sensor_msgs.msg import PointCloud # Note: PointCloud2 is more common
+from visualization_msgs.msg import Marker, MarkerArray
+
+# Transformation utility (Install: pip install tf-transformations)
+from tf_transformations import euler_from_quaternion
 
 from mpc.agent import EgoAgent
 from mpc.dynamic_obstacle import DynamicObstacle
 from mpc.environment import ROSEnvironment
 from mpc.geometry import Circle, Polygon
 from mpc.obstacle import StaticObstacle
-
-import tf2_ros
-from tf2_ros import TransformListener, Buffer
 
 
 class ROSInterface:
@@ -49,14 +56,20 @@ class ROSInterface:
             plot=True,
         )
         self.counter = 0
+
+        
         rospy.init_node("ros_mpc_interface")
 
         self.tfbuffer = Buffer()
         self.listener = TransformListener(self.tfbuffer)
 
-        rospy.Subscriber("/vel_pub", PeopleVelocity, self.people_callback)
         rospy.Subscriber(
-            "/locomotor/VoronoiPlannerROS/voronoi_path",
+            "/vel_pub",
+            PeopleVelocity, 
+            self.people_callback
+        )
+        rospy.Subscriber(
+            "/global_planner_data",
             Path,
             self.waypoint_callback,
         )
@@ -65,9 +78,14 @@ class ROSInterface:
             ObstacleArrayMsg,
             self.obstacle_callback,
         )
-        rospy.Subscriber("/odom", Odometry, self.odom_callback, queue_size=1)
+        rospy.Subscriber(
+            "/odom", 
+            Odometry, 
+            self.odom_callback, 
+            queue_size=1
+        )
+        
         # rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_update_callback)
-
         self.velocity_publisher = rospy.Publisher(
             "wheelchair_diff/cmd_vel", Twist, queue_size=1
         )
@@ -76,27 +94,28 @@ class ROSInterface:
         )
         self.static_obstacle_list = []
         self.waypoints = []
-    #     self.current_goal = None
 
+
+    #     self.current_goal = None
     #     self.static_obstacle_list.append(static_obstacle_circle)
-    #     self.polygon_obstacles = [
+    #     self.ploygon_obstacles = [
     #         StaticObstacle(id=i, geometry=Polygon(vertices=vertices))
     #         for i, vertices in enumerate(polygons)
     #     ]
 
     # def goal_update_callback(self, pose: PoseStamped):
     #     self.current_goal = (
-    #                 pose.pose.position.x,
-    #                 pose.pose.position.y,
-    #                 euler_from_quaternion(
-    #                     [
-    #                         pose.pose.orientation.x,
-    #                         pose.pose.orientation.y,
-    #                         pose.pose.orientation.z,
-    #                         pose.pose.orientation.w,
-    #                     ]
-    #                 )[2],
-    #             )
+    #             pose.pose.position.x,
+    #             pose.pose.position.y,
+    #             euler_from_quaternion(
+    #                 [   pose.pose.orientation.x,
+    #                     pose.pose.orientation.y,
+    #                     pose.pose.orientation.z,
+    #                     pose.pose.orientation.w,
+    #                 ]
+    #             )[2],
+    #         )
+
     #     self.waypoints = []
 
     def run(self):
@@ -107,7 +126,7 @@ class ROSInterface:
         # self.environment.plotter.update_static_obstacles(self.polygon_obstacles)
 
         while not rospy.is_shutdown():
-            print("=======================================")
+            print("=================================")
             self.environment.static_obstacles = self.static_obstacle_list
             # print("No. of Obstacles: ", len(self.static_obstacle_list))
             self.environment.step()
@@ -159,8 +178,6 @@ class ROSInterface:
         # print(marker_array.markers)
         # print(len(marker_array.markers))
 
-        self.marker_publisher.publish(marker_array)
-
     def odom_callback(self, message: Odometry):
         try:
             trans = self.tfbuffer.lookup_transform("map", "base_link", rospy.Time())
@@ -178,8 +195,7 @@ class ROSInterface:
                     )[2],
                 ]  
             )
-            
-            
+
             self.environment.agent.reset(matrices_only=True)
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             pass
@@ -207,8 +223,8 @@ class ROSInterface:
 
             for obstacle in message.obstacles:
                 obstacle: ObstacleMsg
-                # Create a static obstacle for each polygon
-                if len(obstacle.polygon.points[:-1]) > 2:
+                
+                if len(obstacle.polygon.points[: -1]) > 2:
                     points = [
                         (point.x, point.y)
                         for point in cast(List[Point32], obstacle.polygon.points[:-1])
@@ -219,7 +235,6 @@ class ROSInterface:
                     StaticObstacle(
                         id=obstacle.id,
                         geometry=Polygon(
-                            # id=obstacle.id,
                             vertices=points,
                         ),
                     )
@@ -228,10 +243,8 @@ class ROSInterface:
         else:
             pass
 
-        # self.environment.plotter.update_static_obstacles(static_obstacle_list)
-
+    
     def people_callback(self, message: PeopleVelocity):
-        # Create a dynamic obstacle for each person
         dynamic_obstacle_list: List[DynamicObstacle] = []
 
         for person in message.people:
@@ -254,23 +267,19 @@ class ROSInterface:
         print("---")
 
     def waypoint_callback(self, message: Path):
-        # Update the agent's goal with the waypoint position
-        # if message.header.seq == 0:
-        # if self.environment.final_goal_reached:
-        #     self.waypoints = []
         try:
             diff = np.array(self.waypoints[-1]) - np.array((
-                        message.poses[-1].pose.position.x,
-                        message.poses[-1].pose.position.y,
-                        euler_from_quaternion(
-                            [
-                                message.poses[-1].pose.orientation.x,
-                                message.poses[-1].pose.orientation.y,
-                                message.poses[-1].pose.orientation.z,
-                                message.poses[-1].pose.orientation.w,
-                            ]
-                        )[2],
-                    ))
+                message.poses[-1].pose.position.x,
+                message.poses[-1].pose.position.y,
+                euler_from_quaternion(
+                    [
+                        message.poses[-1].pose.orientation.x,
+                        message.poses[-1].pose.orientation.y,
+                        message.poses[-1].pose.orientation.z,
+                        message.poses[-1].pose.orientation.w,
+                    ]
+                    )[2],
+                ))
             print(diff, diff.sum())
             diff = diff.sum()
         except:
@@ -294,7 +303,7 @@ class ROSInterface:
                 for pose in message.poses[::30]
             ]
         # waypoints = []
-            # print("Length of waypoints",len(waypoints))
+         # print("Length of waypoints",len(waypoints))
         #orientation_euler = euler_from_quaternion((0, 0, message.poses[-1].pose.orientation, 0))
             waypoints.append(
                 (
@@ -323,3 +332,5 @@ class ROSInterface:
 if __name__ == "__main__":
     ros_interface = ROSInterface()
     ros_interface.run()
+
+        
