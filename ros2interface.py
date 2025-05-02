@@ -1,40 +1,32 @@
 #!/usr/bin/env python3
 from typing import List, cast
-
+from visualization_msgs.msg import Marker, MarkerArray
 import numpy as np
-import open3d as o3d
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
-import rclpy.time
-
-# TF2 imports
-import tf2_ros
-from tf2_ros import Buffer, TransformListener
-
-from geometry_msgs.msg import Point32, Pose, PoseStamped, PoseWithCovariance, Twist
+from geometry_msgs.msg import Point32, Twist
 from nav_msgs.msg import Odometry, Path
-from sensor_msgs.msg import PointCloud # Note: PointCloud2 is more common
-from visualization_msgs.msg import Marker, MarkerArray
-
-# Transformation utility (Install: pip install tf-transformations)
-from tf_transformations import euler_from_quaternion
+from scipy.spatial.transform import Rotation as R  # Replacement for tf_transformations
 
 from mpc.agent import EgoAgent
 from mpc.dynamic_obstacle import DynamicObstacle
 from mpc.environment import ROSEnvironment
-from mpc.geometry import Circle, Polygon
+from mpc.geometry import Polygon
 from mpc.obstacle import StaticObstacle
 
+from tf2_ros import TransformListener, Buffer
+import tf2_ros
 
-class ROSInterface:
-    """
-    ROSInterface class to interface with ROS
-    Creates a node and subscribes to people messages for obstacles, and publishes commands on the /cmd_vel topic
-    Also subscribes to waypoint pose messages for the next goal
-    """
+# from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
+# from leg_tracker.msg import PeopleVelocity, PersonVelocity
 
+def euler_from_quaternion(quat):
+    return R.from_quat(quat).as_euler('xyz')
+
+class ROSInterface(Node):
     def __init__(self):
+        super().__init__('ros_mpc_interface')
+
         self.environment = ROSEnvironment(
             agent=EgoAgent(
                 id=1,
@@ -57,105 +49,40 @@ class ROSInterface:
         )
         self.counter = 0
 
-        
-        rospy.init_node("ros_mpc_interface")
-
         self.tfbuffer = Buffer()
-        self.listener = TransformListener(self.tfbuffer)
+        self.listener = TransformListener(self.tfbuffer, self)
 
-        rospy.Subscriber(
-            "/vel_pub",
-            PeopleVelocity, 
-            self.people_callback
-        )
-        rospy.Subscriber(
-            "/global_planner_data",
-            Path,
-            self.waypoint_callback,
-        )
-        rospy.Subscriber(
-            "/costmap_converter/costmap_obstacles",
-            ObstacleArrayMsg,
-            self.obstacle_callback,
-        )
-        rospy.Subscriber(
-            "/odom", 
-            Odometry, 
-            self.odom_callback, 
-            queue_size=1
-        )
-        
-        # rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_update_callback)
-        self.velocity_publisher = rospy.Publisher(
-            "wheelchair_diff/cmd_vel", Twist, queue_size=1
-        )
-        self.marker_publisher = rospy.Publisher(
-            "/future_states", MarkerArray, queue_size=10
-        )
+        # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
+        self.create_subscription(Path, '/locomotor/VoronoiPlannerROS/voronoi_path', self.waypoint_callback, 10)
+        # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
+        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+
+        self.velocity_publisher = self.create_publisher(Twist, 'wheelchair_diff/cmd_vel', 10)
+        self.marker_publisher = self.create_publisher(MarkerArray, '/future_states', 10)
+
         self.static_obstacle_list = []
         self.waypoints = []
 
-
-    #     self.current_goal = None
-    #     self.static_obstacle_list.append(static_obstacle_circle)
-    #     self.ploygon_obstacles = [
-    #         StaticObstacle(id=i, geometry=Polygon(vertices=vertices))
-    #         for i, vertices in enumerate(polygons)
-    #     ]
-
-    # def goal_update_callback(self, pose: PoseStamped):
-    #     self.current_goal = (
-    #             pose.pose.position.x,
-    #             pose.pose.position.y,
-    #             euler_from_quaternion(
-    #                 [   pose.pose.orientation.x,
-    #                     pose.pose.orientation.y,
-    #                     pose.pose.orientation.z,
-    #                     pose.pose.orientation.w,
-    #                 ]
-    #             )[2],
-    #         )
-
-    #     self.waypoints = []
+        self.timer = self.create_timer(0.01, self.run)
 
     def run(self):
+        self.environment.static_obstacles = self.static_obstacle_list
+        self.environment.step()
+        self.future_states_pub()
 
-        rate = rospy.Rate(100)
+        control_command = Twist()
+        control_command.linear.x = self.environment.agent.linear_velocity
+        control_command.angular.z = self.environment.agent.angular_velocity
 
-        # self.environment.static_obstacles = self.polygon_obstacles
-        # self.environment.plotter.update_static_obstacles(self.polygon_obstacles)
-
-        while not rospy.is_shutdown():
-            print("=================================")
-            self.environment.static_obstacles = self.static_obstacle_list
-            # print("No. of Obstacles: ", len(self.static_obstacle_list))
-            self.environment.step()
-            self.future_states_pub()
-            # print(self.environment.agent.goal_state, self.environment.agent.state)
-            # print(
-            #     "Velocity",
-            #     self.environment.agent.linear_velocity,
-            #     self.environment.agent.angular_velocity,
-            # )
-
-            # Publish the control command
-            control_command = Twist()
-            control_command.linear.x = self.environment.agent.linear_velocity
-            control_command.angular.z = self.environment.agent.angular_velocity
-            print(control_command.linear.x, control_command.angular.z)
-
-            self.velocity_publisher.publish(control_command)
-
-            rate.sleep()
+        self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()
         future_states = self.environment.agent.states_matrix
-        i = 0
-        for state in future_states.T:
+        for i, state in enumerate(future_states.T):
             marker = Marker()
             marker.header.frame_id = "map"
-            marker.header.stamp = rospy.Time.now()
+            marker.header.stamp = self.get_clock().now().to_msg()
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             marker.id = i
@@ -174,163 +101,111 @@ class ROSInterface:
             marker.color.g = 1.0
             marker.color.b = 1.0
             marker_array.markers.append(marker)
-            i += 1
-        # print(marker_array.markers)
-        # print(len(marker_array.markers))
+
+        self.marker_publisher.publish(marker_array)
 
     def odom_callback(self, message: Odometry):
         try:
-            trans = self.tfbuffer.lookup_transform("map", "base_link", rospy.Time())
-            self.environment.agent.initial_state = np.array(
-                [
-                    trans.transform.translation.x,
-                    trans.transform.translation.y,
-                    euler_from_quaternion(
-                        [
-                            trans.transform.rotation.x,
-                            trans.transform.rotation.y,
-                            trans.transform.rotation.z,
-                            trans.transform.rotation.w,
-                        ]
-                    )[2],
-                ]  
-            )
-
+            trans = self.tfbuffer.lookup_transform("map", "base_link", rclpy.time.Time())
+            self.environment.agent.initial_state = np.array([
+                trans.transform.translation.x,
+                trans.transform.translation.y,
+                euler_from_quaternion([
+                    trans.transform.rotation.x,
+                    trans.transform.rotation.y,
+                    trans.transform.rotation.z,
+                    trans.transform.rotation.w,
+                ])[2],
+            ])
             self.environment.agent.reset(matrices_only=True)
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             pass
-        
-        # Update the agent's state with the current position and orientation
-        # self.environment.agent.initial_state = np.array(
-        #     [
-        #         message.pose.pose.position.x,
-        #         message.pose.pose.position.y,
-        #         euler_from_quaternion(
-        #             [
-        #                 message.pose.pose.orientation.x,
-        #                 message.pose.pose.orientation.y,
-        #                 message.pose.pose.orientation.z,
-        #                 message.pose.pose.orientation.w,
-        #             ]
-        #         )[2],
-        #     ]
-        # )
-        # self.environment.agent.reset(matrices_only=True)
 
-    def obstacle_callback(self, message: ObstacleArrayMsg):
-        if self.counter == 0:
-            self.static_obstacle_list = []
+    # def obstacle_callback(self, message: ObstacleArrayMsg):
+    #     if self.counter == 0:
+    #         self.static_obstacle_list = []
+    #         for obstacle in message.obstacles:
+    #             if len(obstacle.polygon.points[:-1]) > 2:
+    #                 points = [
+    #                     (point.x, point.y)
+    #                     for point in cast(List[Point32], obstacle.polygon.points[:-1])
+    #                 ]
+    #             else:
+    #                 continue
+    #             self.static_obstacle_list.append(
+    #                 StaticObstacle(
+    #                     id=obstacle.id,
+    #                     geometry=Polygon(vertices=points),
+    #                 )
+    #             )
+    #         self.counter += 1
 
-            for obstacle in message.obstacles:
-                obstacle: ObstacleMsg
-                
-                if len(obstacle.polygon.points[: -1]) > 2:
-                    points = [
-                        (point.x, point.y)
-                        for point in cast(List[Point32], obstacle.polygon.points[:-1])
-                    ]
-                else:
-                    continue
-                self.static_obstacle_list.append(
-                    StaticObstacle(
-                        id=obstacle.id,
-                        geometry=Polygon(
-                            vertices=points,
-                        ),
-                    )
-                )
-            self.counter += 1
-        else:
-            pass
-
-    
-    def people_callback(self, message: PeopleVelocity):
-        dynamic_obstacle_list: List[DynamicObstacle] = []
-
-        for person in message.people:
-            person: PersonVelocity
-            dynamic_obstacle_list.append(
-                DynamicObstacle(
-                    id=person.id,
-                    position=(person.pose.position.x, person.pose.position.y),
-                    orientation=np.rad2deg(np.arctan2(person.velocity_y, person.velocity_x)),
-                    linear_velocity=(person.velocity_x**2 + person.velocity_y**2)**0.5,
-                    angular_velocity=0,
-                    horizon=10,
-                )
-            )
-
-        self.environment.dynamic_obstacles = dynamic_obstacle_list
-        print("---")
-        for obstacle in dynamic_obstacle_list:
-            print(obstacle.state)
-        print("---")
+    # def people_callback(self, message: PeopleVelocity):
+    #     dynamic_obstacle_list: List[DynamicObstacle] = []
+    #     for person in message.people:
+    #         dynamic_obstacle_list.append(
+    #             DynamicObstacle(
+    #                 id=person.id,
+    #                 position=(person.pose.position.x, person.pose.position.y),
+    #                 orientation=np.rad2deg(np.arctan2(person.velocity_y, person.velocity_x)),
+    #                 linear_velocity=(person.velocity_x**2 + person.velocity_y**2)**0.5,
+    #                 angular_velocity=0,
+    #                 horizon=10,
+    #             )
+    #         )
+    #     self.environment.dynamic_obstacles = dynamic_obstacle_list
 
     def waypoint_callback(self, message: Path):
         try:
             diff = np.array(self.waypoints[-1]) - np.array((
                 message.poses[-1].pose.position.x,
                 message.poses[-1].pose.position.y,
-                euler_from_quaternion(
-                    [
-                        message.poses[-1].pose.orientation.x,
-                        message.poses[-1].pose.orientation.y,
-                        message.poses[-1].pose.orientation.z,
-                        message.poses[-1].pose.orientation.w,
-                    ]
-                    )[2],
-                ))
-            print(diff, diff.sum())
+                euler_from_quaternion([
+                    message.poses[-1].pose.orientation.x,
+                    message.poses[-1].pose.orientation.y,
+                    message.poses[-1].pose.orientation.z,
+                    message.poses[-1].pose.orientation.w,
+                ])[2],
+            ))
             diff = diff.sum()
         except:
             diff = 0
 
         if self.waypoints == [] or abs(diff) > 0.1:
-            print("Updating waypoints")
             waypoints = [
                 (
                     pose.pose.position.x,
                     pose.pose.position.y,
-                    euler_from_quaternion(
-                        [
-                            pose.pose.orientation.x,
-                            pose.pose.orientation.y,
-                            pose.pose.orientation.z,
-                            pose.pose.orientation.w,
-                        ]
-                    )[2],
+                    euler_from_quaternion([
+                        pose.pose.orientation.x,
+                        pose.pose.orientation.y,
+                        pose.pose.orientation.z,
+                        pose.pose.orientation.w,
+                    ])[2],
                 )
                 for pose in message.poses[::30]
             ]
-        # waypoints = []
-         # print("Length of waypoints",len(waypoints))
-        #orientation_euler = euler_from_quaternion((0, 0, message.poses[-1].pose.orientation, 0))
-            waypoints.append(
-                (
-                    message.poses[-1].pose.position.x,
-                    message.poses[-1].pose.position.y,
-                    euler_from_quaternion(
-                        [
-                            message.poses[-1].pose.orientation.x,
-                            message.poses[-1].pose.orientation.y,
-                            message.poses[-1].pose.orientation.z,
-                            message.poses[-1].pose.orientation.w,
-                        ]
-                    )[2],
-                )
-            )
-
-            # waypoints.append(self.current_goal)
+            waypoints.append((
+                message.poses[-1].pose.position.x,
+                message.poses[-1].pose.position.y,
+                euler_from_quaternion([
+                    message.poses[-1].pose.orientation.x,
+                    message.poses[-1].pose.orientation.y,
+                    message.poses[-1].pose.orientation.z,
+                    message.poses[-1].pose.orientation.w,
+                ])[2],
+            ))
             self.waypoints = waypoints
-            print("Waypoints", waypoints)
             self.environment.waypoints = np.array(waypoints)
             self.environment.waypoint_index = 0
             self.environment.agent.update_goal(self.environment.current_waypoint)
-        # self.environment.plotter.update_goal(self.environment.waypoints)
 
-
-if __name__ == "__main__":
+def main(args=None):
+    rclpy.init(args=args)
     ros_interface = ROSInterface()
-    ros_interface.run()
+    rclpy.spin(ros_interface)
+    ros_interface.destroy_node()
+    rclpy.shutdown()
 
-        
+if __name__ == '__main__':
+    main()

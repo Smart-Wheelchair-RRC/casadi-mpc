@@ -1,705 +1,242 @@
 #!/usr/bin/env python3
-from typing import List, cast
-
+# === 1. Imports ===
+# Standard Python libraries
 import numpy as np
-import open3d as o3d
+
+# ROS 2 client library for Python
 import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
-import rclpy.time
+from rclpy.node import Node # Base class for creating ROS 2 nodes
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy # Quality of Service settings
+import rclpy.time # For accessing ROS time, e.g., for TF lookups
 
-# TF2 imports
-import tf2_ros
-from tf2_ros import Buffer, TransformListener
+# TF2 (Transform library) imports
+import tf2_ros # ROS 2 integration for TF2
+from tf2_ros import Buffer, TransformListener # Tools for receiving and buffering coordinate transforms
 
-# Message imports (Ensure these packages exist in your ROS 2 workspace)
-from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg # Assuming ROS 2 version exists
-from geometry_msgs.msg import Point32, Pose, PoseStamped, PoseWithCovariance, Twist
-from leg_tracker.msg import PeopleVelocity, PersonVelocity # Assuming ROS 2 version exists
-from nav_msgs.msg import Odometry, Path
-# from people_msgs.msg import People, Person # Assuming ROS 2 version exists (Not used directly in original snippet)
-from sensor_msgs.msg import PointCloud # Note: PointCloud2 is more common
-from visualization_msgs.msg import Marker, MarkerArray
+# ROS 2 Standard Message Types
+from geometry_msgs.msg import Twist # Message type for velocity commands (linear/angular)
+from nav_msgs.msg import Odometry, Path # Odometry (pose/velocity estimate), Path (sequence of poses)
+from visualization_msgs.msg import Marker, MarkerArray # Messages for publishing visualization shapes in RViz
 
-# Transformation utility (Install: pip install tf-transformations)
-from tf_transformations import euler_from_quaternion
+# Transformation utility (requires: pip install tf-transformations)
+from tf_transformations import euler_from_quaternion # Function to convert quaternions to Euler angles (like yaw)
 
-# Your custom MPC imports (Ensure these are Python 3 compatible)
-from mpc.agent import EgoAgent
-from mpc.dynamic_obstacle import DynamicObstacle
-from mpc.environment import ROSEnvironment
-from mpc.geometry import Circle, Polygon
-from mpc.obstacle import StaticObstacle
+# Your custom MPC library imports
+# Ensure these modules are accessible in your Python environment (installed via setup.py)
+# NOTE: These classes are assumed to handle empty obstacle lists gracefully.
+from mpc.agent import EgoAgent # Your MPC agent implementation
+from mpc.environment import ROSEnvironment # Your environment class managing the agent and simulation/ROS interaction
 
-
-class ROSInterfaceNode(Node):
+# === 2. Node Class Definition ===
+class ROS2MPCInterface(Node):
     """
-    ROSInterfaceNode class to interface with ROS 2 Humble
-    Creates a node and subscribes to people messages for obstacles, and publishes commands on the /cmd_vel topic
-    Also subscribes to waypoint pose messages for the next goal
-    """
-
-    def __init__(self):
-        super().__init__("ros_mpc_interface_node")
-
-        self.environment = ROSEnvironment(
-            agent=EgoAgent(
-                id=1,
-                radius=0.5,
-                initial_position=(0, 0),
-                initial_orientation=np.deg2rad(90),
-                horizon=10,
-                use_warm_start=True,
-                planning_time_step=0.8,
-                linear_velocity_bounds=(0, 0.3),
-                angular_velocity_bounds=(-0.5, 0.5),
-                linear_acceleration_bounds=(-0.5, 0.5),
-                angular_acceleration_bounds=(-1, 1),
-                sensor_radius=3,
-            ),
-            static_obstacles=[],
-            dynamic_obstacles=[],
-            waypoints=[],
-            plot=True, # Note: Plotting might behave differently in ROS 2 context
-        )
-        self.counter = 0 # Counter for obstacle processing logic
-
-        # --- TF2 Setup ---
-        self.tfbuffer = Buffer()
-        # Pass the node instance (self) to the TransformListener
-        self.listener = TransformListener(self.tfbuffer, self)
-
-        # --- QoS Profiles ---
-        # Default reliable profile for commands, paths, markers
-        qos_profile_reliable = QoSProfile(
-             reliability=QoSReliabilityPolicy.RELIABLE,
-             history=QoSHistoryPolicy.KEEP_LAST,
-             depth=10
-         )
-        # Sensor data profile (best effort, keep last) for high-frequency data like odom, obstacles
-        qos_profile_sensor_data = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5
-        )
-
-        # --- Subscribers ---
-        self.people_sub = self.create_subscription(
-            PeopleVelocity,
-            "/vel_pub",
-            self.people_callback,
-            qos_profile_reliable # Or sensor_data if high frequency
-        )
-        self.path_sub = self.create_subscription(
-            Path,
-            "/locomotor/VoronoiPlannerROS/voronoi_path",
-            self.waypoint_callback,
-            qos_profile_reliable
-        )
-        # Assuming '/point_cloud' publishes sensor_msgs/PointCloud
-        self.obstacle_sub = self.create_subscription(
-            PointCloud, # WARNING: Check if your topic actually publishes PointCloud or PointCloud2
-            "/point_cloud",
-            self.obstacle_callback,
-            qos_profile_sensor_data
-        )
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            qos_profile_sensor_data # Odometry often uses sensor data QoS
-        )
-        # self.goal_sub = self.create_subscription( # Example if needed
-        #     PoseStamped,
-        #     "/move_base_simple/goal",
-        #     self.goal_update_callback,
-        #     qos_profile_reliable
-        # )
-
-        # --- Publishers ---
-        self.velocity_publisher = self.create_publisher(
-            Twist,
-            "wheelchair_diff/cmd_vel", # Consider remapping if needed
-            qos_profile_reliable
-        )
-        self.marker_publisher = self.create_publisher(
-            MarkerArray,
-            "/future_states",
-            qos_profile_reliable # Markers often use reliable QoS
-        )
-
-        # --- Internal State ---
-        self.static_obstacle_list = []
-        self.waypoints = []
-
-        self.get_logger().info(f"{self.get_name()} node initialized successfully.")
-
-
-    # --- Callbacks ---
-
-    def odom_callback(self, message: Odometry):
-        try:
-            # Use rclpy.time.Time() for latest available transform
-            trans = self.tfbuffer.lookup_transform("map", "base_link", rclpy.time.Time())
-
-            # Extract orientation using geometry_msgs/Quaternion fields
-            orientation_q = trans.transform.rotation
-            orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
-            current_yaw = euler_from_quaternion(orientation_list)[2]
-
-            self.environment.agent.initial_state = np.array(
-                [
-                    trans.transform.translation.x,
-                    trans.transform.translation.y,
-                    current_yaw,
-                ]
-            )
-            self.environment.agent.reset(matrices_only=True) # Reset MPC matrices with new state
-
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ) as e:
-             self.get_logger().warn(f"TF lookup failed: {e}")
-             pass # Continue without updating state if transform fails
-
-    # WARNING: This callback assumes the input topic is sensor_msgs/PointCloud.
-    # If it's sensor_msgs/PointCloud2, this needs rewriting using sensor_msgs_py.point_cloud2
-    def obstacle_callback(self, message: PointCloud):
-        # Logic to process obstacles only once (if counter logic is desired)
-        if self.counter > 0:
-             # pass # Uncomment if you only want to process the first message
-             self.counter = 0 # Reset counter to always process latest cloud
-
-        if self.counter == 0:
-            point_cloud_list = [] # Using list append is slightly more Pythonic
-            points = message.points if message.points else []
-            for point in points:
-                # Assuming PointCloud points have x, y, z fields
-                point_cloud_list.append([point.x, point.y]) # Keep only x, y for processing
-
-            if not point_cloud_list:
-                self.static_obstacle_list = [] # Clear obstacles if input is empty
-                self.get_logger().debug("Received empty static obstacle PointCloud.")
-                return # No further processing needed
-
-            # Process the collected points
-            processed_points_2d = self._process_point_cloud(np.array(point_cloud_list))
-
-            new_static_obstacle_list = []
-            for i, point in enumerate(processed_points_2d.T): # Iterate rows if points are (2, N)
-                if point.shape[0] == 2: # Ensure we have x, y
-                    new_static_obstacle_list.append(
-                        StaticObstacle(
-                            id=i, # Simple sequential ID
-                            geometry=Circle(
-                                center=(point[0], point[1]),
-                                radius=0.1, # Fixed radius for point obstacles
-                            ),
-                        )
-                    )
-            self.static_obstacle_list = new_static_obstacle_list
-            # self.get_logger().debug(f"Processed {len(self.static_obstacle_list)} static obstacles.")
-
-            self.counter += 1
-        # else: # Logic if counter > 0
-        #     pass
-
-    def people_callback(self, message: PeopleVelocity):
-        dynamic_obstacle_list: List[DynamicObstacle] = []
-
-        for person in message.people: # Assuming message.people is the list
-            person = cast(PersonVelocity, person) # Cast if needed for type hints
-            try:
-                linear_velocity = (person.velocity_x**2 + person.velocity_y**2)**0.5
-                # Avoid division by zero if velocity is zero
-                orientation_rad = 0.0
-                if linear_velocity > 1e-6: # Small threshold
-                    orientation_rad = np.arctan2(person.velocity_y, person.velocity_x)
-
-                dynamic_obstacle_list.append(
-                    DynamicObstacle(
-                        id=person.id, # Assuming person has an ID field
-                        position=(person.pose.position.x, person.pose.position.y),
-                        orientation=orientation_rad, # Store orientation in radians
-                        linear_velocity=linear_velocity,
-                        angular_velocity=0, # Assuming zero angular velocity for people
-                        horizon=10, # Or get from environment/agent params
-                    )
-                )
-            except AttributeError as e:
-                self.get_logger().warn(f"Missing attribute in PersonVelocity message: {e}")
-                continue # Skip this person if message format is unexpected
-
-        self.environment.dynamic_obstacles = dynamic_obstacle_list
-        self.get_logger().debug(f"Updated with {len(dynamic_obstacle_list)} dynamic obstacles.")
-        # Optional: Print obstacle states for debugging
-        # self.get_logger().debug("--- Dynamic Obstacles ---")
-        # for obstacle in dynamic_obstacle_list:
-        #     self.get_logger().debug(f"ID {obstacle.id}: {obstacle.state}")
-        # self.get_logger().debug("-------------------------")
-
-
-    def waypoint_callback(self, message: Path):
-        if not message.poses:
-            self.get_logger().warn("Received empty path message.")
-            # Decide behavior: clear waypoints or keep old ones?
-            # self.waypoints = []
-            # self.environment.waypoints = np.array([])
-            return
-
-        # Extract final pose from the new path message
-        final_pose_msg = message.poses[-1].pose
-        final_orientation_q = final_pose_msg.orientation
-        final_orientation_list = [final_orientation_q.x, final_orientation_q.y, final_orientation_q.z, final_orientation_q.w]
-        final_waypoint = (
-             final_pose_msg.position.x,
-             final_pose_msg.position.y,
-             euler_from_quaternion(final_orientation_list)[2],
-        )
-
-        # Check if the new path's final waypoint is significantly different from the current last one
-        should_update = False
-        if not self.waypoints: # If no waypoints exist yet
-             should_update = True
-        else:
-             try:
-                 current_last_waypoint = self.waypoints[-1]
-                 diff = np.array(current_last_waypoint) - np.array(final_waypoint)
-                 diff_magnitude = np.linalg.norm(diff[:2]) # Check position difference primarily
-                 self.get_logger().debug(f"Waypoint difference check: diff={diff}, mag={diff_magnitude}")
-                 if diff_magnitude > 0.1: # Threshold for position difference
-                     should_update = True
-             except IndexError: # If self.waypoints somehow became empty between checks
-                 should_update = True
-             except Exception as e:
-                 self.get_logger().error(f"Error comparing waypoints: {e}")
-                 should_update = True # Update on error as a safe default
-
-        if should_update:
-            self.get_logger().info("Updating waypoints from new path.")
-            new_waypoints = []
-            # Sample waypoints from the path (e.g., every 30th point)
-            sampling_step = 30
-            sampled_poses = message.poses[::sampling_step]
-            # Ensure the first and last poses are included if sampling
-            if not message.poses[0] in sampled_poses and message.poses:
-                sampled_poses.insert(0, message.poses[0])
-            if not message.poses[-1] in sampled_poses and message.poses:
-                 sampled_poses.append(message.poses[-1]) # Ensure last pose is always included
-
-
-            for pose_stamped in sampled_poses:
-                pose = pose_stamped.pose
-                orientation_q = pose.orientation
-                orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
-                new_waypoints.append(
-                    (
-                        pose.position.x,
-                        pose.position.y,
-                        euler_from_quaternion(orientation_list)[2],
-                    )
-                )
-
-            # # Ensure the very last waypoint from the message is included, even if not sampled
-            # if new_waypoints[-1] != final_waypoint:
-            #      new_waypoints.append(final_waypoint)
-
-
-            self.waypoints = new_waypoints
-            self.get_logger().info(f"Waypoints updated: {self.waypoints}")
-            self.environment.waypoints = np.array(self.waypoints)
-            self.environment.waypoint_index = 0 # Reset waypoint index
-            if self.environment.waypoints.size > 0:
-                 self.environment.agent.update_goal(self.environment.current_waypoint)
-            else:
-                 self.get_logger().warn("Waypoint list is empty after processing path.")
-            # self.environment.plotter.update_goal(self.environment.waypoints) # Update plotter if used
-
-    # --- Helper Methods ---
-
-    def _process_point_cloud(self, point_cloud_xy: np.ndarray):
-        """
-        Processes a 2D numpy array of points (N, 2) using Open3D voxel downsampling.
-        Returns a numpy array (2, M) where M <= max_points.
-        """
-        max_points = 500
-        output_point_cloud_2d = np.zeros((2, max_points)) # Default empty result
-
-        if point_cloud_xy.shape[0] == 0: # Check if input is empty
-            self.get_logger().debug("Point cloud for processing is empty.")
-            return output_point_cloud_2d
-
-        try:
-             # Create a 3D PointCloud object for Open3D, setting Z=0
-             pcd = o3d.geometry.PointCloud()
-             # Ensure input is (N, 3) for Vector3dVector
-             points_3d = np.hstack((point_cloud_xy, np.zeros((point_cloud_xy.shape[0], 1))))
-             pcd.points = o3d.utility.Vector3dVector(points_3d)
-
-             # Downsample
-             downsampled_pcd = pcd.voxel_down_sample(voxel_size=0.16)
-             pcd_array_3d = np.asarray(downsampled_pcd.points)
-
-             if pcd_array_3d.shape[0] == 0:
-                 self.get_logger().debug("Point cloud empty after downsampling.")
-                 return output_point_cloud_2d
-
-             # Keep only X, Y coordinates
-             pcd_array_2d = pcd_array_3d[:, :2]
-
-             # Sort by distance and take top 'max_points'
-             distances = np.linalg.norm(pcd_array_2d, axis=1)
-             sorted_indices = np.argsort(distances)
-             num_points_to_keep = min(pcd_array_2d.shape[0], max_points)
-             closest_points_2d = pcd_array_2d[sorted_indices[:num_points_to_keep]]
-
-             # Format as (2, M)
-             output_point_cloud_2d[:, :num_points_to_keep] = closest_points_2d.T
-             return output_point_cloud_2d
-
-        except Exception as e:
-             self.get_logger().error(f"Error processing point cloud with Open3D: {e}")
-             # Return default empty array on error
-             return np.zeros((2, max_points))
-
-
-    def future_states_pub(self):
-        """ Publishes predicted future states as markers """
-        marker_array = MarkerArray()
-        # Ensure states_matrix is populated
-        if self.environment.agent.states_matrix is None or self.environment.agent.states_matrix.size == 0:
-            return
-
-        future_states = self.environment.agent.states_matrix
-        marker_id = 0
-        # Iterate columns if states_matrix is (state_dim, horizon_steps)
-        for i in range(future_states.shape[1]):
-            state = future_states[:, i]
-            if len(state) < 2: continue # Need at least x, y
-
-            marker = Marker()
-            marker.header.frame_id = "map" # Ensure this frame exists
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            marker.id = marker_id
-            marker.pose.position.x = float(state[0])
-            marker.pose.position.y = float(state[1])
-            marker.pose.position.z = 0.0 # Assuming 2D visualization
-            marker.pose.orientation.x = 0.0
-            marker.pose.orientation.y = 0.0
-            marker.pose.orientation.z = 0.0
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = 0.05
-            marker.scale.y = 0.05
-            marker.scale.z = 0.05
-            marker.color.a = 1.0
-            marker.color.r = 0.0 # Color: Cyan
-            marker.color.g = 1.0
-            marker.color.b = 1.0
-             # Optional: Add lifetime to prevent markers from lingering indefinitely
-            # marker.lifetime = rclpy.duration.Duration(seconds=1.0).to_msg()
-
-            marker_array.markers.append(marker)
-            marker_id += 1
-
-        if marker_array.markers:
-             self.marker_publisher.publish(marker_array)
-
-
-    # --- Main Execution Loop ---
-
-    def run(self):
-        """ Main execution loop for the MPC node """
-        # Create a rate object based on the node's clock
-        rate = self.create_rate(100) # 100 Hz
-
-        while rclpy.ok():
-            self.get_logger().debug("================= MPC Step =================")
-
-            # Update environment obstacles (already handled by callbacks)
-            # Ensure static obstacles are correctly assigned before stepping
-            self.environment.static_obstacles = self.static_obstacle_list
-            # Dynamic obstacles updated in people_callback
-
-            # Run MPC step
-            try:
-                 self.environment.step()
-            except Exception as e:
-                 self.get_logger().error(f"Error during environment step: {e}", exc_info=True)
-                 # Decide how to handle step error (e.g., publish zero velocity)
-                 control_command = Twist() # Zero velocity command
-                 self.velocity_publisher.publish(control_command)
-                 rate.sleep()
-                 continue # Skip rest of the loop iteration
-
-
-            # Publish predicted states
-            self.future_states_pub()
-
-            # Publish control command
-            control_command = Twist()
-            # Ensure agent velocities are valid numbers
-            linear_vel = self.environment.agent.linear_velocity
-            angular_vel = self.environment.agent.angular_velocity
-
-            if np.isnan(linear_vel) or np.isinf(linear_vel):
-                self.get_logger().warn("NaN or Inf detected for linear velocity, sending 0.")
-                linear_vel = 0.0
-            if np.isnan(angular_vel) or np.isinf(angular_vel):
-                self.get_logger().warn("NaN or Inf detected for angular velocity, sending 0.")
-                angular_vel = 0.0
-
-            control_command.linear.x = float(linear_vel)
-            control_command.angular.z = float(angular_vel)
-
-            self.get_logger().debug(f"Publishing cmd_vel: Linear={control_command.linear.x:.3f}, Angular={control_command.angular.z:.3f}")
-            self.velocity_publisher.publish(control_command)
-
-            # Wait according to rate
-            rate.sleep()
-
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = None # Initialize node to None for graceful shutdown in case of init error
-    try:
-        node = ROSInterfaceNode()
-        node.run() # Start the main processing loop
-    except KeyboardInterrupt:
-        if node:
-            node.get_logger().info('Keyboard interrupt, shutting down.')
-    except Exception as e:
-        if node:
-            node.get_logger().fatal(f"Unhandled exception in main: {e}", exc_info=True)
-        else:
-            print(f"Exception during node initialization: {e}") # Use print if logger isn't available
-    finally:
-        # Cleanup
-        if node:
-            # Optional: Publish zero velocity on shutdown
-            shutdown_cmd = Twist()
-            node.velocity_publisher.publish(shutdown_cmd)
-            node.get_logger().info('Publishing zero velocity before shutdown.')
-            # Destroy the node explicitly
-            node.destroy_node()
-        # Shutdown RCLPY
-        if rclpy.ok():
-             rclpy.shutdown()
-        print("ROS 2 Interface shutdown complete.")
-
-
-if __name__ == "__main__":
-    main()
-
-
-
-#!/usr/bin/env python3
-import numpy as np
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-import rclpy.time
-
-# TF2 imports
-import tf2_ros
-from tf2_ros import Buffer, TransformListener
-
-# Message imports
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry, Path
-from visualization_msgs.msg import Marker, MarkerArray
-
-# Transformation utility (Install: pip install tf-transformations)
-from tf_transformations import euler_from_quaternion
-
-# Your custom MPC imports (Ensure these are Python 3 compatible and handle empty obstacle lists)
-from mpc.agent import EgoAgent
-from mpc.environment import ROSEnvironment
-# Assuming geometry/obstacle classes are not directly needed in this simplified interface
-# from mpc.geometry import Circle, Polygon
-# from mpc.obstacle import StaticObstacle
-# from mpc.dynamic_obstacle import DynamicObstacle
-
-
-class SimpleMPCNode(Node):
-    """
-    Simplified ROS 2 Interface for MPC.
-    - Subscribes to Odometry (for TF) and Path (for waypoints).
-    - Runs MPC based on agent state and waypoints only (no obstacles).
+    ROS 2 Interface for MPC Path Following (Obstacle Avoidance Disabled).
+    - Gets robot state via TF2 (triggered by Odometry).
+    - Gets target path (waypoints) from a Path topic.
+    - Computes velocity commands using the MPC agent.
     - Publishes Twist commands and visualization markers.
     """
 
+    # === 3. Initialization (`__init__`) ===
     def __init__(self):
-        super().__init__("simple_mpc_node")
+        """
+        Constructor for the ROS2MPCInterface node.
+        Initializes the node, MPC components, TF listener, publishers, and subscribers.
+        """
+        # 3.1 Initialize the parent Node class with a unique node name
+        super().__init__("ros2_mpc_interface")
 
-        # --- Initialize MPC Environment (without obstacles) ---
-        # NOTE: Assumes ROSEnvironment and EgoAgent handle empty obstacle lists correctly.
+        # 3.2 Initialize MPC Environment and Agent
+        # Creates an instance of your custom MPC environment.
+        # Crucially, static_obstacles and dynamic_obstacles are empty lists,
+        # meaning this setup will NOT perform obstacle avoidance.
         self.environment = ROSEnvironment(
-            agent=EgoAgent(
-                id=1,
-                radius=0.5,
-                initial_position=(0, 0), # Will be updated by odom_callback
-                initial_orientation=np.deg2rad(90), # Will be updated by odom_callback
-                horizon=10,
-                use_warm_start=True,
-                planning_time_step=0.8,
-                linear_velocity_bounds=(0, 0.3),
-                angular_velocity_bounds=(-0.5, 0.5),
-                linear_acceleration_bounds=(-0.5, 0.5),
-                angular_acceleration_bounds=(-1, 1),
-                sensor_radius=3, # Sensor radius might be irrelevant without obstacles
+            agent=EgoAgent( # Initialize the robot agent for the MPC
+                id=1, # Agent identifier
+                radius=0.5, # Agent's physical radius (meters) - used for collision checks if obstacles were present
+                initial_position=(0, 0), # Placeholder, will be updated by odom_callback
+                initial_orientation=np.deg2rad(90), # Placeholder, will be updated by odom_callback
+                horizon=10, # MPC prediction horizon (number of steps)
+                use_warm_start=True, # Optimization flag: use previous solution as initial guess
+                planning_time_step=0.8, # Time step duration used in MPC planning (seconds)
+                linear_velocity_bounds=(0, 0.3), # Min/Max linear velocity (m/s)
+                angular_velocity_bounds=(-0.5, 0.5), # Min/Max angular velocity (rad/s)
+                linear_acceleration_bounds=(-0.5, 0.5), # Min/Max linear acceleration (m/s^2)
+                angular_acceleration_bounds=(-1, 1), # Min/Max angular acceleration (rad/s^2)
+                sensor_radius=3, # Agent's sensor range (meters) - likely unused without obstacles
             ),
-            static_obstacles=[],    # NO static obstacles
-            dynamic_obstacles=[],   # NO dynamic obstacles
-            waypoints=[],           # Will be updated by waypoint_callback
-            plot=True,              # Plotting might show only agent and path
+            static_obstacles=[],    # IMPORTANT: No static obstacles provided
+            dynamic_obstacles=[],   # IMPORTANT: No dynamic obstacles provided
+            waypoints=[],           # Waypoints list, initially empty, filled by waypoint_callback
+            plot=False,             # Disable internal plotting from the environment class if it exists
         )
 
-        # --- TF2 Setup ---
+        # 3.3 TF2 Setup
+        # Buffer stores incoming transforms for a specified duration.
         self.tfbuffer = Buffer()
+        # Listener receives transforms over the network and fills the buffer.
+        # It needs a reference to the node (self) to interact with ROS 2 infrastructure.
         self.listener = TransformListener(self.tfbuffer, self)
 
-        # --- QoS Profiles ---
+        # 3.4 Quality of Service (QoS) Profiles
+        # Define communication reliability and history settings.
+        # RELIABLE: Ensures delivery (retries if needed), good for commands, paths.
         qos_profile_reliable = QoSProfile(
              reliability=QoSReliabilityPolicy.RELIABLE,
-             history=QoSHistoryPolicy.KEEP_LAST,
-             depth=10
+             history=QoSHistoryPolicy.KEEP_LAST, # Keep only the last N messages
+             depth=10 # Buffer size for KEEP_LAST history
          )
+        # BEST_EFFORT: Faster, less overhead, okay to drop messages. Good for high-frequency sensor data.
         qos_profile_sensor_data = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5
+            depth=5 # Keep fewer messages for sensor data
         )
 
-        # --- Subscribers ---
-        # Subscribes to Odometry mainly to trigger TF lookup for the precise pose
+        # 3.5 Subscribers
+        # Create subscriptions to specific topics. When a message arrives, the specified callback is executed.
+        # Subscribes to Odometry: Used mainly as a trigger to query TF for the latest pose.
         self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            qos_profile_sensor_data
+            Odometry,                   # Message type
+            "/odom",                    # Topic name (standard odometry topic)
+            self.odom_callback,         # Function to call when a message arrives
+            qos_profile_sensor_data     # QoS profile for this subscription
         )
-        # Subscribes to the path topic for waypoints
+        # Subscribes to Path: Receives the desired path for the robot to follow.
         self.path_sub = self.create_subscription(
-            Path,
-            "/locomotor/VoronoiPlannerROS/voronoi_path", # Make sure this topic exists
-            self.waypoint_callback,
-            qos_profile_reliable
+            Path,                                       # Message type
+            "/locomotor/VoronoiPlannerROS/voronoi_path", # Topic name (source of the path) - CHANGE IF NEEDED
+            self.waypoint_callback,                     # Callback function
+            qos_profile_reliable                        # QoS profile
         )
 
-        # --- Publishers ---
-        # Publishes velocity commands computed by MPC
+        # 3.6 Publishers
+        # Create publishers to send messages to specific topics.
+        # Publishes Twist commands: Sends velocity commands calculated by the MPC.
         self.velocity_publisher = self.create_publisher(
-            Twist,
-            "wheelchair_diff/cmd_vel", # Make sure this topic is correct for your robot
-            qos_profile_reliable
+            Twist,                      # Message type
+            "wheelchair_diff/cmd_vel",  # Topic name (where the robot controller listens) - CHANGE IF NEEDED
+            qos_profile_reliable        # QoS profile
         )
-        # Publishes the predicted future states for visualization (e.g., in RViz)
+        # Publishes MarkerArray: Sends visualization markers for RViz.
         self.marker_publisher = self.create_publisher(
-            MarkerArray,
-            "/future_states",
-            qos_profile_reliable
+            MarkerArray,                # Message type
+            "/future_states",           # Topic name for markers
+            qos_profile_reliable        # QoS profile
         )
 
-        # --- Internal State ---
-        self.waypoints = [] # Store the current list of waypoints
+        # 3.7 Internal State Variables
+        # Store the list of waypoints received from the path topic.
+        self.waypoints = []
 
-        self.get_logger().info(f"{self.get_name()} initialized successfully (Obstacle Avoidance Disabled).")
-        self.get_logger().info(f"Subscribing to Odometry on: /odom")
-        self.get_logger().info(f"Subscribing to Path on: /locomotor/VoronoiPlannerROS/voronoi_path")
-        self.get_logger().info(f"Publishing Twist commands on: /wheelchair_diff/cmd_vel")
-        self.get_logger().info(f"Publishing Markers on: /future_states")
+        # 3.8 Logging Initialization Info
+        # Use the node's logger for ROS 2 standard logging.
+        self.get_logger().info(f"'{self.get_name()}' node initialized (Obstacle Avoidance Disabled).")
+        self.get_logger().info(f"Subscribing to Odometry on: {self.odom_sub.topic_name}")
+        self.get_logger().info(f"Subscribing to Path on: {self.path_sub.topic_name}")
+        self.get_logger().info(f"Publishing Twist commands on: {self.velocity_publisher.topic_name}")
+        self.get_logger().info(f"Publishing Markers on: {self.marker_publisher.topic_name}")
 
 
-    # --- Callbacks ---
-
+    # === 4. Callbacks ===
     def odom_callback(self, message: Odometry):
         """
-        Callback triggered by odometry messages. Uses TF2 to get the
-        robot's current pose in the 'map' frame and updates the MPC agent's state.
+        Callback for Odometry messages. Uses TF2 to get the robot's pose
+        in the 'map' frame and updates the MPC agent's current state.
         """
         try:
-            # Get the latest transform from the map frame to the robot's base_link frame
+            # 4.1 Look up the transform from 'map' frame to 'base_link' frame.
+            # 'map' is typically the fixed world frame from SLAM/localization.
+            # 'base_link' is typically the robot's root frame. - CHANGE IF YOUR FRAMES DIFFER
+            # rclpy.time.Time() requests the latest available transform.
             trans = self.tfbuffer.lookup_transform("map", "base_link", rclpy.time.Time())
 
-            # Extract position
+            # 4.2 Extract position (x, y) from the transform.
             pos_x = trans.transform.translation.x
             pos_y = trans.transform.translation.y
 
-            # Extract orientation (quaternion) and convert to yaw (radians)
+            # 4.3 Extract orientation (quaternion) from the transform.
             orientation_q = trans.transform.rotation
+            # Create a list [x, y, z, w] for the conversion function.
             orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
+            # Convert quaternion to Euler angles; index [2] gets the yaw (rotation around Z).
             current_yaw = euler_from_quaternion(orientation_list)[2]
 
-            # Update the MPC agent's initial state for the next planning cycle
-            self.environment.agent.initial_state = np.array(
-                [
-                    pos_x,
-                    pos_y,
-                    current_yaw,
-                ]
-            )
-            # Reset MPC matrices to use the new initial state
+            # 4.4 Update the MPC agent's state (used as the starting point for the next MPC plan).
+            # This should match the state representation used by your EgoAgent.
+            self.environment.agent.initial_state = np.array([pos_x, pos_y, current_yaw])
+
+            # 4.5 Reset agent's internal MPC matrices to reflect the new initial state.
+            # `matrices_only=True` might be an optimization to avoid re-creating everything.
             self.environment.agent.reset(matrices_only=True)
+            # Log the updated state for debugging (at DEBUG level to avoid flooding).
             self.get_logger().debug(f"Agent state updated: x={pos_x:.2f}, y={pos_y:.2f}, yaw={np.rad2deg(current_yaw):.1f} deg")
 
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ) as e:
-             # Log a warning if the transform lookup fails, but don't crash
+        # 4.6 Handle TF2 exceptions if the transform lookup fails.
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+             # Log a warning, throttled to avoid spamming the console if TF is temporarily unavailable.
              self.get_logger().warn(f"TF lookup failed ('map' to 'base_link'): {e}", throttle_duration_sec=5.0)
-             pass # Continue, the agent will use its previously set state
+             # Allow the node to continue; the agent will use its previous state.
+             pass
 
     def waypoint_callback(self, message: Path):
         """
-        Callback triggered by new Path messages. Extracts waypoints and updates
-        the MPC environment's target path if it has changed significantly.
+        Callback for Path messages. Extracts waypoints and updates the MPC target path.
         """
+        # 4.7 Check if the received path contains any poses.
         if not message.poses:
+            # Log a warning once if an empty path is received.
             self.get_logger().warn("Received empty path message.", once=True)
-            return
+            # Optionally clear existing waypoints or just ignore the empty message.
+            # self.waypoints = []
+            # self.environment.waypoints = np.array(self.waypoints)
+            return # Exit the callback
 
-        # Extract the final waypoint from the received path message
+        # 4.8 Extract the final pose from the received path. Used to check if the path goal changed.
         final_pose_msg = message.poses[-1].pose
         final_orientation_q = final_pose_msg.orientation
         final_orientation_list = [final_orientation_q.x, final_orientation_q.y, final_orientation_q.z, final_orientation_q.w]
+        # Convert the final pose into the (x, y, yaw) tuple format used internally.
         final_waypoint = (
              final_pose_msg.position.x,
              final_pose_msg.position.y,
              euler_from_quaternion(final_orientation_list)[2], # Yaw
         )
 
-        # Check if the new path's final waypoint is different from the current one
+        # 4.9 Check if the received path is significantly different from the current one.
         should_update = False
-        if not self.waypoints: # If no waypoints exist yet
+        # If we don't have any waypoints stored yet, definitely update.
+        if not self.waypoints:
              should_update = True
         else:
              try:
+                 # Get the last waypoint currently stored.
                  current_last_waypoint = self.waypoints[-1]
-                 # Calculate difference primarily based on position
+                 # Calculate the Euclidean distance between the current last waypoint's position
+                 # and the new path's final waypoint's position.
                  diff_pos = np.linalg.norm(np.array(current_last_waypoint[:2]) - np.array(final_waypoint[:2]))
-                 if diff_pos > 0.1: # Update if final position differs by > 10cm
+                 # If the position difference exceeds a threshold (e.g., 10 cm), consider it a new path.
+                 if diff_pos > 0.1:
                      should_update = True
-             except IndexError:
+             except IndexError: # Should not happen if self.waypoints check passed, but safe to handle.
                  should_update = True
-             except Exception as e:
+             except Exception as e: # Catch any other comparison errors.
                  self.get_logger().error(f"Error comparing waypoints: {e}")
-                 should_update = True # Update on error
+                 should_update = True # Update path if comparison fails.
 
+        # 4.10 If the path should be updated:
         if should_update:
             self.get_logger().info("Received new path. Updating waypoints.")
+            # Create a new list to store waypoints extracted from the message.
             new_waypoints = []
-            # Extract waypoints (e.g., sample every Nth pose or use all)
-            # Using all poses here for simplicity:
+            # Iterate through all poses in the received Path message.
+            # (Alternatively, you could sample them, e.g., message.poses[::10])
             for pose_stamped in message.poses:
-                pose = pose_stamped.pose
-                orientation_q = pose.orientation
+                pose = pose_stamped.pose # Get the Pose part
+                orientation_q = pose.orientation # Get the Quaternion
+                # Convert quaternion to [x,y,z,w] list for the helper function.
                 orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
+                # Append the waypoint as an (x, y, yaw) tuple.
                 new_waypoints.append(
                     (
                         pose.position.x,
@@ -708,160 +245,207 @@ class SimpleMPCNode(Node):
                     )
                 )
 
+            # 4.11 Update the node's internal waypoint list.
             self.waypoints = new_waypoints
             self.get_logger().info(f"Waypoints updated with {len(self.waypoints)} points.")
+            # Update the waypoints within the MPC environment (converting to NumPy array).
             self.environment.waypoints = np.array(self.waypoints)
-            self.environment.waypoint_index = 0 # Start tracking from the first waypoint
+            # Reset the environment's waypoint tracker to start from the beginning of the new path.
+            self.environment.waypoint_index = 0
+            # If the new path is not empty, update the agent's immediate goal
+            # (usually the first or next waypoint based on environment logic).
             if self.environment.waypoints.size > 0:
-                 # Update the agent's goal to the first waypoint in the new list
                  self.environment.agent.update_goal(self.environment.current_waypoint)
             else:
+                 # Log a warning if the processed path resulted in zero waypoints.
                  self.get_logger().warn("Waypoint list is empty after processing path.")
 
-    # --- Helper Methods ---
-
+    # === 5. Helper Methods ===
     def future_states_pub(self):
-        """ Publishes the predicted future states from the MPC agent as markers. """
+        """ Publishes the MPC agent's predicted future trajectory as visualization markers. """
+        # 5.1 Create a MarkerArray message to hold multiple markers.
         marker_array = MarkerArray()
-        # Ensure the agent has computed states
+        # 5.2 Check if the agent has computed a trajectory (states_matrix).
         if self.environment.agent.states_matrix is None or self.environment.agent.states_matrix.size == 0:
-            return
+            return # Do nothing if no prediction is available
 
-        future_states = self.environment.agent.states_matrix # Shape (state_dim, horizon_steps)
-        marker_id = 0
-        # Iterate through each predicted state in the horizon
+        # 5.3 Get the predicted states matrix (usually shape: [state_dim, horizon_length]).
+        future_states = self.environment.agent.states_matrix
+        marker_id = 0 # Unique ID for each marker in the array.
+        # 5.4 Iterate through each predicted state (columns of the matrix).
         for i in range(future_states.shape[1]):
-            state = future_states[:, i]
-            if len(state) < 2: continue # Need at least x, y
+            state = future_states[:, i] # Get the i-th predicted state [x, y, yaw, ...]
+            # Ensure the state has at least x and y components.
+            if len(state) < 2: continue
 
+            # 5.5 Create a new Marker message.
             marker = Marker()
-            marker.header.frame_id = "map" # Publish markers in the map frame
+            # Set the frame_id (must match the fixed frame in RViz, e.g., "map").
+            marker.header.frame_id = "map"
+            # Set the timestamp.
             marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = "mpc_prediction" # Namespace for the markers
+            # Set a namespace to group markers.
+            marker.ns = "mpc_prediction"
+            # Assign the unique ID.
             marker.id = marker_id
+            # Set the marker type (e.g., SPHERE).
             marker.type = Marker.SPHERE
+            # Set the action (ADD modifies/adds the marker).
             marker.action = Marker.ADD
-            # Position the marker at the predicted state
+            # Set the marker's position using the predicted state's x and y.
             marker.pose.position.x = float(state[0])
             marker.pose.position.y = float(state[1])
-            marker.pose.position.z = 0.1 # Slightly elevate markers for visibility
-            # Default orientation (marker orientation doesn't represent robot orientation here)
+            marker.pose.position.z = 0.1 # Slightly raise markers off the ground plane.
+            # Set marker orientation (usually fixed, doesn't represent robot orientation).
             marker.pose.orientation.x = 0.0
             marker.pose.orientation.y = 0.0
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
-            # Appearance
+            # Set marker scale (size).
             marker.scale.x = 0.08
             marker.scale.y = 0.08
             marker.scale.z = 0.08
-            marker.color.a = 0.8 # Semi-transparent
-            marker.color.r = 0.0 # Color: Green
-            marker.color.g = 1.0
-            marker.color.b = 0.0
-            # Automatically delete markers after a short duration
+            # Set marker color (RGBA, values 0.0 to 1.0). Green, semi-transparent.
+            marker.color.a = 0.8 # Alpha (transparency)
+            marker.color.r = 0.0 # Red
+            marker.color.g = 1.0 # Green
+            marker.color.b = 0.0 # Blue
+            # Set marker lifetime (how long it persists in RViz before auto-deleting).
             marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
 
+            # 5.6 Add the configured marker to the MarkerArray.
             marker_array.markers.append(marker)
+            # Increment the ID for the next marker.
             marker_id += 1
 
+        # 5.7 If any markers were created, publish the entire MarkerArray.
         if marker_array.markers:
              self.marker_publisher.publish(marker_array)
 
 
-    # --- Main Execution Loop ---
-
+    # === 6. Main Execution Loop (`run`) ===
     def run(self):
-        """ Main execution loop: runs MPC step, publishes commands and markers. """
-        # Set the loop rate (e.g., 10 Hz - adjust based on MPC computation time)
+        """ Contains the main loop that repeatedly runs the MPC step and publishes commands. """
+        # 6.1 Define the desired loop frequency (e.g., 10 Hz).
         loop_rate = 10.0
+        # Create a Rate object to control the loop speed.
         rate = self.create_rate(loop_rate)
-        self.get_logger().info(f"MPC loop running at {loop_rate} Hz.")
+        self.get_logger().info(f"MPC control loop started at {loop_rate} Hz.")
 
+        # 6.2 Loop continuously as long as ROS 2 is running (`rclpy.ok()`).
         while rclpy.ok():
-            # Check if we have waypoints to follow
+            # 6.3 Check if waypoints are available. If not, stop the robot.
             if not self.waypoints or self.environment.waypoints.size == 0:
+                # Log this state, throttled to avoid spam.
                 self.get_logger().info("No waypoints available. Stopping robot.", throttle_duration_sec=5.0)
-                # Publish zero velocity if there's no path
+                # Create a Twist message with zero velocities.
                 stop_command = Twist()
+                # Publish the zero velocity command.
                 self.velocity_publisher.publish(stop_command)
+                # Wait for the next loop iteration according to the rate.
                 rate.sleep()
-                continue # Skip MPC step if no goal
+                # Skip the rest of the loop (MPC step).
+                continue
 
+            # Log the start of an MPC cycle (at DEBUG level).
             self.get_logger().debug("--- MPC Step Start ---")
 
-            # Run the MPC step (calculates optimal control input)
-            # Assumes self.environment.agent.initial_state and self.environment.waypoints are up-to-date
+            # 6.4 Execute the core MPC step.
+            # This involves:
+            # - The environment potentially updating the agent's goal based on current position and waypoint list.
+            # - The agent solving the optimization problem based on its current state, goal, and prediction model.
             try:
-                 self.environment.step() # This calls the agent's MPC solve method internally
+                 # Call the environment's step method, which should trigger the agent's MPC solve.
+                 self.environment.step()
+            # 6.5 Handle potential errors during the MPC calculation.
             except Exception as e:
-                 # Log errors during the MPC calculation, publish zero velocity as a safety measure
+                 # Log the error with traceback information.
                  self.get_logger().error(f"Error during MPC environment step: {e}", exc_info=True)
+                 # Publish zero velocity as a safety fallback.
                  error_command = Twist()
                  self.velocity_publisher.publish(error_command)
+                 # Sleep and skip the rest of this loop iteration.
                  rate.sleep()
-                 continue # Skip the rest of this loop iteration
+                 continue
 
-            # Publish the predicted trajectory for visualization
+            # 6.6 Publish the predicted trajectory markers after a successful step.
             self.future_states_pub()
 
-            # Extract the calculated control command (first element of the optimal control sequence)
+            # 6.7 Get the calculated optimal control command (velocity) from the agent.
+            # This is typically the first control input from the MPC solution sequence.
             control_command = Twist()
             linear_vel = self.environment.agent.linear_velocity
             angular_vel = self.environment.agent.angular_velocity
 
-            # Basic check for invalid numbers (NaN or infinity)
+            # 6.8 Sanity check: Ensure velocities are valid numbers (not NaN or Inf).
             if np.isnan(linear_vel) or np.isinf(linear_vel) or \
                np.isnan(angular_vel) or np.isinf(angular_vel):
                 self.get_logger().warn("NaN or Inf detected in control command, sending zero velocity.")
                 linear_vel = 0.0
                 angular_vel = 0.0
 
+            # 6.9 Populate the Twist message.
             control_command.linear.x = float(linear_vel)
-            control_command.angular.z = float(angular_vel)
+            control_command.angular.z = float(angular_vel) # Assuming a diff-drive robot where yaw rate is controlled.
 
-            # Publish the command
+            # 6.10 Publish the Twist command.
             self.get_logger().debug(f"Publishing cmd_vel: Linear={control_command.linear.x:.3f}, Angular={control_command.angular.z:.3f}")
             self.velocity_publisher.publish(control_command)
 
+            # Log the end of the cycle (at DEBUG level).
             self.get_logger().debug("--- MPC Step End ---")
 
-            # Wait for the next cycle
+            # 6.11 Wait until the next cycle based on the defined loop rate.
             rate.sleep()
 
 
+# === 7. Main Execution (`if __name__ == "__main__":`) ===
 def main(args=None):
-    """ Main function to initialize and run the ROS 2 node. """
+    """
+    Main function called when the script is executed.
+    Initializes rclpy, creates the node, runs it, and handles shutdown.
+    """
+    # 7.1 Initialize the ROS 2 Python client library.
     rclpy.init(args=args)
+    # Initialize node variable to None for proper error handling/cleanup.
     node = None
     try:
-        node = SimpleMPCNode()
-        node.run() # Start the main processing loop
+        # 7.2 Create an instance of the ROS2MPCInterface node class.
+        node = ROS2MPCInterface()
+        # 7.3 Start the node's main loop (calls the `run` method).
+        node.run()
+    # 7.4 Catch keyboard interrupts (Ctrl+C) for graceful shutdown.
     except KeyboardInterrupt:
-        if node:
+        if node: # Check if node was successfully created before logging.
             node.get_logger().info('Keyboard interrupt, shutting down.')
+    # 7.5 Catch any other unexpected exceptions.
     except Exception as e:
-        # Log any exceptions that weren't caught elsewhere
+        # Log fatal errors.
         if node:
             node.get_logger().fatal(f"Unhandled exception in main: {e}", exc_info=True)
         else:
+            # Use print if the logger isn't available (e.g., error during __init__).
             print(f"Exception during node initialization: {e}")
+    # 7.6 Finally block: ensures cleanup code runs regardless of exceptions.
     finally:
-        # Cleanup resources
         if node:
-            # Publish a zero velocity command on shutdown
+            # 7.7 Optional: Publish a zero velocity command just before shutting down.
             shutdown_cmd = Twist()
-            try: # Prevent error if publisher already destroyed
+            try: # Protect against errors if publisher is already destroyed.
                 node.velocity_publisher.publish(shutdown_cmd)
                 node.get_logger().info('Published zero velocity before shutdown.')
             except Exception as pub_e:
+                 # Avoid logging errors if the publisher was already cleaned up.
                  if "Publisher already destroyed" not in str(pub_e):
                       print(f"Error publishing stop command on shutdown: {pub_e}")
+            # 7.8 Properly destroy the node instance, releasing resources.
             node.destroy_node()
-        # Shutdown rclpy context
-        if rclpy.ok():
+        # 7.9 Shut down the ROS 2 Python client library.
+        if rclpy.ok(): # Check if rclpy is still running before shutting down.
              rclpy.shutdown()
-        print("Simple MPC Node shutdown complete.")
+        print(f"'{ROS2MPCInterface.__name__}' shutdown complete.")
 
 
+# 7.10 Standard Python entry point check: calls the main function when the script is run directly.
 if __name__ == "__main__":
     main()
