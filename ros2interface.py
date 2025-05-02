@@ -53,11 +53,11 @@ class ROSInterface(Node):
         self.listener = TransformListener(self.tfbuffer, self)
 
         # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
-        self.create_subscription(Path, '/locomotor/VoronoiPlannerROS/voronoi_path', self.waypoint_callback, 10)
+        self.create_subscription(Path, '/plan', self.waypoint_callback, 10)
         # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
         self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
-        self.velocity_publisher = self.create_publisher(Twist, 'wheelchair_diff/cmd_vel', 10)
+        self.velocity_publisher = self.create_publisher(Twist, '/wheelchair2_base_controller/cmd_vel_unstamped', 10)
         self.marker_publisher = self.create_publisher(MarkerArray, '/future_states', 10)
 
         self.static_obstacle_list = []
@@ -86,9 +86,9 @@ class ROSInterface(Node):
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             marker.id = i
-            marker.pose.position.x = state[0]
-            marker.pose.position.y = state[1]
-            marker.pose.position.z = 0
+            marker.pose.position.x = float(state[0])
+            marker.pose.position.y = float(state[1])
+            marker.pose.position.z = 0.0
             marker.pose.orientation.x = 0.0
             marker.pose.orientation.y = 0.0
             marker.pose.orientation.z = 0.0
