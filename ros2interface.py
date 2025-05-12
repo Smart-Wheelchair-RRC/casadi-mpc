@@ -17,6 +17,11 @@ from mpc.obstacle import StaticObstacle
 from tf2_ros import TransformListener, Buffer
 import tf2_ros
 
+import numpy as np
+import cv2
+from nav_msgs.msg import OccupancyGrid
+from geometry_msgs.msg import Pose
+
 # from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
 # from leg_tracker.msg import PeopleVelocity, PersonVelocity
 
@@ -54,6 +59,11 @@ class ROSInterface(Node):
 
         # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
         self.create_subscription(Path, '/plan', self.waypoint_callback, 10)
+        self.subscription = self.create_subscription(
+            OccupancyGrid,
+            '/global_costmap/costmap',
+            self.obstacle_callback,
+            10)
         # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
         self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
@@ -120,6 +130,36 @@ class ROSInterface(Node):
             self.environment.agent.reset(matrices_only=True)
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             pass
+
+    def obstacle_callback(self, msg: OccupancyGrid):
+        if self.counter == 0:
+            width = msg.info.width
+            height = msg.info.height
+            resolution = msg.info.resolution
+            origin = msg.info.origin
+
+            grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+            binary = np.uint8((grid > 50) * 255)
+
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            self.static_obstacle_list = []
+
+            for contour in contours:
+                if len(contour) >= 3:
+                    polygon = []
+                    for pt in contour:
+                        x = pt[0][0] * resolution + origin.position.x
+                        y = pt[0][1] * resolution + origin.position.y
+                        polygon.append((x, y))
+                    self.static_obstacle_list.append(
+                        StaticObstacle(
+                            id=len(self.static_obstacle_list),
+                            geometry=Polygon(vertices=polygon)
+                        )
+                    )
+            self.counter += 1
+
 
     # def obstacle_callback(self, message: ObstacleArrayMsg):
     #     if self.counter == 0:
