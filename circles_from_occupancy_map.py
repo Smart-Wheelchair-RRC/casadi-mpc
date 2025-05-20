@@ -110,8 +110,8 @@ def get_circle_locations_from_occupancy_map(
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    from rosbags.rosbag2 import Reader
-    from rosbags.typesys import Stores, get_typestore
+    from rosbags.rosbag2 import Reader  # type:ignore[import]
+    from rosbags.typesys import Stores, get_typestore  # type:ignore[import]
 
     # Create a typestore and get the string class.
     typestore = get_typestore(Stores.LATEST)
