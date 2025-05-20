@@ -60,5 +60,5 @@ environment = LocalEnvironment(
     waypoints=[(-2, -2, np.deg2rad(90)), (-2, 10, np.deg2rad(90)), (10, 5, np.deg2rad(90))],
     # save_video=True,
 )
-# environment.view_environment()
+environment.view_environment()
 environment.loop()

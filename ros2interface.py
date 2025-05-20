@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point32, Twist
 from nav_msgs.msg import Odometry, Path
-from scipy.spatial.transform import Rotation as R  # Replacement for tf_transformations
+from scipy.spatial.transform import Rotation as R  # Replacement for tf_transformations from ROS1
 
 from mpc.agent import EgoAgent
 from mpc.dynamic_obstacle import DynamicObstacle
@@ -38,11 +38,11 @@ class ROSInterface(Node):
                 radius=0.5,
                 initial_position=(0, 0),
                 initial_orientation=np.deg2rad(90),
-                horizon=10,
+                horizon=5,
                 use_warm_start=True,
                 planning_time_step=0.8,
-                linear_velocity_bounds=(0, 0.3),
-                angular_velocity_bounds=(-0.5, 0.5),
+                linear_velocity_bounds=(0, 0.25),
+                angular_velocity_bounds=(-0.25, 0.25),
                 linear_acceleration_bounds=(-0.5, 0.5),
                 angular_acceleration_bounds=(-1, 1),
                 sensor_radius=3,
