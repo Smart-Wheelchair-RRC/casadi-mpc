@@ -117,7 +117,7 @@ if __name__ == "__main__":
     typestore = get_typestore(Stores.LATEST)
 
     # Create reader instance and open for reading.
-    with Reader("rosbag2_2025_04_07-03_27_33_0") as reader:
+    with Reader("results/rosbag2_2025_04_07-03_27_33_0") as reader:
         # Topic and msgtype information is available on .connections list.
         connections = [
             x for x in reader.connections if x.topic == "/local_costmap/costmap"
