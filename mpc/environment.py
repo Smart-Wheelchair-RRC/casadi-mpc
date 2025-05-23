@@ -219,7 +219,8 @@ class ROSEnvironment(Environment):
 
         if self.plot:
             self.plotter.update_plot(self.waypoints)
-            self.plotter.update_static_obstacles(filtered_dynamic_obstacles)
+            self.plotter.update_static_obstacles(filtered_static_obstacles)
+            # self.plotter.update_static_obstacles(filtered_dynamic_obstacles)
 
         print("Current Waypoint", self.current_waypoint)
         print("Waypoints", self.waypoints)
