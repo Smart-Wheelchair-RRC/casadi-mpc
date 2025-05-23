@@ -77,18 +77,18 @@ class ROSInterface(Node):
         self.timer = self.create_timer(0.01, self.run)
 
         # Plot for occupancy map with circles
-        self.fig, self.ax = plt.subplots()
+        # self.fig, self.ax = plt.subplots()
 
     def run(self):
         self.environment.static_obstacles = self.static_obstacle_list
         self.environment.step()
         self.future_states_pub()
 
-        # control_command = Twist()
-        # control_command.linear.x = self.environment.agent.linear_velocity
-        # control_command.angular.z = self.environment.agent.angular_velocity
+        control_command = Twist()
+        control_command.linear.x = self.environment.agent.linear_velocity
+        control_command.angular.z = self.environment.agent.angular_velocity
 
-        # self.velocity_publisher.publish(control_command)
+        self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()
@@ -151,42 +151,45 @@ class ROSInterface(Node):
         )
         circle_locations = get_circle_locations_from_occupancy_map(
             occupancy_map,
-            ego_position=(
-                message.info.origin.position.x,
-                message.info.origin.position.y,
+            ego_position=tuple(
+                self.environment.agent.initial_state[:2]
             ),
             occupancy_map_resolution=message.info.resolution,
         )
         # import matplotlib.pyplot as plt
         # fig, ax = plt.subplots()
-        im = self.ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
+        # self.ax.clear()  # Clear the axis for the next iteration
 
-        # Convert circle locations to occupancy map coordinates
-        circle_locations_for_plotting = [
-            (
-                int(
-                    (point[0] - message.info.origin.position.x)
-                    / message.info.resolution
-                ),
-                int(
-                    (point[1] - message.info.origin.position.y)
-                    / message.info.resolution
-                ),
-            )
-            for point in circle_locations
-        ]
+        # im = self.ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
 
-        for circle in circle_locations_for_plotting:
-            # Draw the lines on the occupancy map
-            circle_x, circle_y = circle
-            self.ax.plot(
-                circle_x + message.info.width // 2,
-                circle_y + message.info.height // 2,
-                marker="o",
-                markerfacecolor="none",
-                markeredgecolor="red",
-                markersize=10,
-            )
+        # # Convert circle locations to occupancy map coordinates
+        # circle_locations_for_plotting = [
+        #     (
+        #         int(
+        #             (point[0] - message.info.origin.position.x)
+        #             / message.info.resolution
+        #         ),
+        #         int(
+        #             (point[1] - message.info.origin.position.y)
+        #             / message.info.resolution
+        #         ),
+        #     )
+        #     for point in circle_locations
+        # ]
+
+        # for circle in circle_locations_for_plotting:
+        #     # Draw the lines on the occupancy map
+        #     circle_x, circle_y = circle
+        #     self.ax.plot(
+        #         circle_x + message.info.width // 2,
+        #         circle_y + message.info.height // 2,
+        #         marker="o",
+        #         markerfacecolor="none",
+        #         markeredgecolor="red",
+        #         markersize=10,
+        #     )
+        
+        # plt.pause(0.1)
 
         # plt.show()
         # print(circle_locations)
@@ -293,19 +296,19 @@ class ROSInterface(Node):
 
         if self.waypoints == [] or abs(diff) > 0.1:
             waypoints = [
-                (
-                    pose.pose.position.x,
-                    pose.pose.position.y,
-                    euler_from_quaternion(
-                        [
-                            pose.pose.orientation.x,
-                            pose.pose.orientation.y,
-                            pose.pose.orientation.z,
-                            pose.pose.orientation.w,
-                        ]
-                    )[2],
-                )
-                for pose in message.poses[::30]
+                # (
+                #     pose.pose.position.x,
+                #     pose.pose.position.y,
+                #     euler_from_quaternion(
+                #         [
+                #             pose.pose.orientation.x,
+                #             pose.pose.orientation.y,
+                #             pose.pose.orientation.z,
+                #             pose.pose.orientation.w,
+                #         ]
+                #     )[2],
+                # )
+                # for pose in message.poses[::30]
             ]
             waypoints.append(
                 (
