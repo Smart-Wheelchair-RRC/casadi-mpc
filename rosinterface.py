@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 from typing import List, cast
-from visualization_msgs.msg import Marker, MarkerArray
+
 import numpy as np
+import open3d as o3d
 import rospy
+import tf2_ros
 from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
-from geometry_msgs.msg import Point32, PoseWithCovariance, Twist, PoseStamped, Pose
-from leg_tracker.msg import PeopleVelocity, PersonVelocity
+from geometry_msgs.msg import Point32, Pose, PoseStamped, PoseWithCovariance, Twist
 from nav_msgs.msg import Odometry, Path
-from people_msgs.msg import People, Person
+from people_msgs.msg import People
+from sensor_msgs.msg import PointCloud
 from tf.transformations import euler_from_quaternion
+from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
 
 from mpc.agent import EgoAgent
 from mpc.dynamic_obstacle import DynamicObstacle
 from mpc.environment import ROSEnvironment
 from mpc.geometry import Circle, Polygon
 from mpc.obstacle import StaticObstacle
-
-import tf2_ros
-from tf2_ros import TransformListener, Buffer
 
 
 class ROSInterface:
@@ -54,17 +55,20 @@ class ROSInterface:
         self.tfbuffer = Buffer()
         self.listener = TransformListener(self.tfbuffer)
 
-        rospy.Subscriber("/vel_pub", PeopleVelocity, self.people_callback)
+        # rospy.Subscriber("/vel_pub", PeopleVelocity, self.people_callback)
+        rospy.Subscriber("/onboard_detector/people_velocity", People, self.people_callback)
+
         rospy.Subscriber(
             "/locomotor/VoronoiPlannerROS/voronoi_path",
             Path,
             self.waypoint_callback,
         )
-        rospy.Subscriber(
-            "/costmap_converter/costmap_obstacles",
-            ObstacleArrayMsg,
-            self.obstacle_callback,
-        )
+        # rospy.Subscriber(
+        #     "/costmap_converter/costmap_obstacles",
+        #     ObstacleArrayMsg,
+        #     self.obstacle_callback,
+        # )
+        rospy.Subscriber("/point_cloud", PointCloud, self.obstacle_callback)
         rospy.Subscriber("/odom", Odometry, self.odom_callback, queue_size=1)
         # rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_update_callback)
 
@@ -100,7 +104,6 @@ class ROSInterface:
     #     self.waypoints = []
 
     def run(self):
-
         rate = rospy.Rate(100)
 
         # self.environment.static_obstacles = self.polygon_obstacles
@@ -176,14 +179,17 @@ class ROSInterface:
                             trans.transform.rotation.w,
                         ]
                     )[2],
-                ]  
+                ]
             )
-            
-            
+
             self.environment.agent.reset(matrices_only=True)
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ):
             pass
-        
+
         # Update the agent's state with the current position and orientation
         # self.environment.agent.initial_state = np.array(
         #     [
@@ -201,51 +207,104 @@ class ROSInterface:
         # )
         # self.environment.agent.reset(matrices_only=True)
 
-    def obstacle_callback(self, message: ObstacleArrayMsg):
+    # def obstacle_callback(self, message: ObstacleArrayMsg):
+    #     if self.counter == 0:
+    #         self.static_obstacle_list = []
+
+    #         for obstacle in message.obstacles:
+    #             obstacle: ObstacleMsg
+    #             # Create a static obstacle for each polygon
+    #             if len(obstacle.polygon.points[:-1]) > 2:
+    #                 points = [
+    #                     (point.x, point.y)
+    #                     for point in cast(List[Point32], obstacle.polygon.points[:-1])
+    #                 ]
+    #             else:
+    #                 continue
+    #             self.static_obstacle_list.append(
+    #                 StaticObstacle(
+    #                     id=obstacle.id,
+    #                     geometry=Polygon(
+    #                         # id=obstacle.id,
+    #                         vertices=points,
+    #                     ),
+    #                 )
+    #             )
+    #         self.counter += 1
+    #     else:
+    #         pass
+
+    # self.environment.plotter.update_static_obstacles(static_obstacle_list)
+
+    def _process_point_cloud(self, point_cloud: np.ndarray):
+        max_points = 500
+        output_point_cloud = np.zeros((2, max_points))
+
+        if point_cloud.shape[0] == 0 or point_cloud.shape[1] == 0:
+            return output_point_cloud
+
+        # output_point_cloud = point_cloud[:, :2][np.argsort(np.linalg.norm(point_cloud, axis=-1), axis=-1)][
+        #     : self.max_projection_static_obstacles, :2
+        # ]
+
+        # return output_point_cloud.T
+
+        pcd = o3d.geometry.PointCloud()
+        static_obstacles = np.stack(
+            (point_cloud[:, 0], point_cloud[:, 1], np.zeros_like(point_cloud[:, 0]))
+        )
+        pcd.points = o3d.utility.Vector3dVector(static_obstacles.T)
+        downsampled_pcd = pcd.voxel_down_sample(voxel_size=0.16)
+        pcd_array = np.asarray(downsampled_pcd.points)
+        pcd_array = pcd_array[:, :2][
+            np.argsort(np.linalg.norm(pcd_array, axis=-1), axis=-1)
+        ][:max_points]
+        return pcd_array.T
+
+    def obstacle_callback(self, message: PointCloud):
         if self.counter == 0:
+            point_cloud_array = []
+
+            points = message.points if message.points else []
+            for point in points:
+                point_cloud_array.append([point.x, point.y, 0])
+
+            point_cloud = self._process_point_cloud(np.array(point_cloud_array))
+
             self.static_obstacle_list = []
 
-            for obstacle in message.obstacles:
-                obstacle: ObstacleMsg
-                # Create a static obstacle for each polygon
-                if len(obstacle.polygon.points[:-1]) > 2:
-                    points = [
-                        (point.x, point.y)
-                        for point in cast(List[Point32], obstacle.polygon.points[:-1])
-                    ]
-                else:
-                    continue
+            for i, point in enumerate(point_cloud.T):
                 self.static_obstacle_list.append(
                     StaticObstacle(
-                        id=obstacle.id,
-                        geometry=Polygon(
-                            # id=obstacle.id,
-                            vertices=points,
+                        id=i,
+                        geometry=Circle(
+                            center=(point[0], point[1]),
+                            radius=0.1,
                         ),
                     )
                 )
+
             self.counter += 1
         else:
             pass
 
-        # self.environment.plotter.update_static_obstacles(static_obstacle_list)
-
-    def people_callback(self, message: PeopleVelocity):
-        # Create a dynamic obstacle for each person
+    def people_callback(self, message: People):
+        print("people_callback invoked")
         dynamic_obstacle_list: List[DynamicObstacle] = []
 
-        for person in message.people:
-            person: PersonVelocity
+        for i, person in enumerate(message.people):
+            # person.position and person.velocity come from people_msgs::Person
             dynamic_obstacle_list.append(
                 DynamicObstacle(
-                    id=person.id,
-                    position=(person.pose.position.x, person.pose.position.y),
-                    orientation=np.rad2deg(np.arctan2(person.velocity_y, person.velocity_x)),
-                    linear_velocity=(person.velocity_x**2 + person.velocity_y**2)**0.5,
+                    id=i,
+                    position=(person.position.x, person.position.y),
+                    orientation=np.arctan2(person.velocity.y, person.velocity.x),
+                    linear_velocity=(person.velocity.x**2 + person.velocity.y**2)**0.5,
                     angular_velocity=0,
                     horizon=10,
                 )
             )
+            # rospy.loginfo("Dynamic Obstacle %d: pos=(%.2f, %.2f), vel=(%.2f, %.2f)", i, person.position.x, person.position.y, person.velocity.x, person.velocity.y)
 
         self.environment.dynamic_obstacles = dynamic_obstacle_list
         print("---")
@@ -259,18 +318,20 @@ class ROSInterface:
         # if self.environment.final_goal_reached:
         #     self.waypoints = []
         try:
-            diff = np.array(self.waypoints[-1]) - np.array((
-                        message.poses[-1].pose.position.x,
-                        message.poses[-1].pose.position.y,
-                        euler_from_quaternion(
-                            [
-                                message.poses[-1].pose.orientation.x,
-                                message.poses[-1].pose.orientation.y,
-                                message.poses[-1].pose.orientation.z,
-                                message.poses[-1].pose.orientation.w,
-                            ]
-                        )[2],
-                    ))
+            diff = np.array(self.waypoints[-1]) - np.array(
+                (
+                    message.poses[-1].pose.position.x,
+                    message.poses[-1].pose.position.y,
+                    euler_from_quaternion(
+                        [
+                            message.poses[-1].pose.orientation.x,
+                            message.poses[-1].pose.orientation.y,
+                            message.poses[-1].pose.orientation.z,
+                            message.poses[-1].pose.orientation.w,
+                        ]
+                    )[2],
+                )
+            )
             print(diff, diff.sum())
             diff = diff.sum()
         except:
@@ -293,9 +354,9 @@ class ROSInterface:
                 )
                 for pose in message.poses[::30]
             ]
-        # waypoints = []
+            # waypoints = []
             # print("Length of waypoints",len(waypoints))
-        #orientation_euler = euler_from_quaternion((0, 0, message.poses[-1].pose.orientation, 0))
+            # orientation_euler = euler_from_quaternion((0, 0, message.poses[-1].pose.orientation, 0))
             waypoints.append(
                 (
                     message.poses[-1].pose.position.x,

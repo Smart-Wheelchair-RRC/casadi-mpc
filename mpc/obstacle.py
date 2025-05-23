@@ -1,17 +1,18 @@
 from abc import ABC, abstractmethod
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import casadi as ca
 import numpy as np
 
-from mpc.geometry import Geometry
+if TYPE_CHECKING:
+    from mpc.geometry import Geometry
 
 
 class Obstacle(ABC):
     def __init__(
         self,
         id: int,
-        geometry: Geometry,
+        geometry: "Geometry",
     ):
         self.id = id
         self.geometry = geometry
@@ -39,7 +40,7 @@ class StaticObstacle(Obstacle):
     def __init__(
         self,
         id: int,
-        geometry: Geometry,
+        geometry: "Geometry",
     ):
         super().__init__(id=id, geometry=geometry)
 

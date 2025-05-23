@@ -1,9 +1,13 @@
-from typing import List, Optional, Tuple, cast
+# import for type hinting
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union, cast
 
 import casadi as ca
 import numpy as np
 
-from mpc.obstacle import Obstacle
+if TYPE_CHECKING:
+    from mpc.dynamic_obstacle import DynamicObstacle, SimulatedDynamicObstacle
+    from mpc.obstacle import StaticObstacle
+from mpc.geometry import Circle
 
 
 def MX_horzcat(*args: ca.MX) -> ca.MX:
@@ -275,16 +279,73 @@ class MotionPlanner:
         )
 
     def _get_symbolic_obstacle_constraints(
-        self, visible_obstacles: List[Obstacle]
+        self,
+        static_obstacles: List["StaticObstacle"],
+        dynamic_obstacles: List[Union["DynamicObstacle", "SimulatedDynamicObstacle"]],
     ) -> ca.MX:
-        return MX_horzcat(
-            *[
-                obstacle.calculate_symbolic_matrix_distance(
-                    symbolic_states_matrix=self.symbolic_states_matrix[:, 1:]
-                )
-                for obstacle in visible_obstacles
-            ]
+        all_obstacles = static_obstacles + dynamic_obstacles
+
+        if (
+            not all(
+                isinstance(all_obstacles[i].geometry, Circle)
+                for i in range(len(all_obstacles))
+            )
+            or len(all_obstacles) == 0
+        ):
+            return MX_horzcat(
+                *[
+                    obstacle.calculate_symbolic_matrix_distance(
+                        symbolic_states_matrix=self.symbolic_states_matrix[:, 1:]
+                    )
+                    for obstacle in all_obstacles
+                ]
+            )
+
+        num_obstacles = len(all_obstacles)
+
+        centers = DM_horzcat(
+            *[all_obstacles[i].geometry.center for i in range(len(all_obstacles))]
         )
+
+        x_differences = cast(
+            ca.MX,
+            ca.repmat(centers[0, :].T, 1, self.horizon)
+            - ca.repmat(self.symbolic_states_matrix[0, 1:], num_obstacles, 1),
+        )
+
+        y_differences = cast(
+            ca.MX,
+            ca.repmat(centers[1, :].T, 1, self.horizon)
+            - ca.repmat(self.symbolic_states_matrix[1, 1:], num_obstacles, 1),
+        )
+
+        distances = cast(
+            ca.MX,
+            ca.sqrt(x_differences**2 + y_differences**2),
+        ).T
+
+        if len(static_obstacles) > 0:
+            static_radius_vector = ca.repmat(
+                ca.DM(static_obstacles[0].geometry.radius),
+                (self.horizon, len(static_obstacles)),
+            )
+        else:
+            static_radius_vector = ca.DM.zeros((self.horizon, 0))
+
+        if len(dynamic_obstacles) > 0:
+            dynamic_radius_vector = ca.repmat(
+                ca.DM(dynamic_obstacles[0].geometry.radius),
+                (self.horizon, len(dynamic_obstacles)),
+            )
+        else:
+            dynamic_radius_vector = ca.DM.zeros((self.horizon, 0))
+
+        distances = distances - ca.horzcat(
+            static_radius_vector,
+            dynamic_radius_vector,
+        )
+
+        return distances
 
     def _get_obstacle_constraints_bounds(
         self, inflation_radius: float, num_obstacles: int
@@ -375,7 +436,8 @@ class MotionPlanner:
         self,
         current_linear_velocity: float,
         current_angular_velocity: float,
-        visible_obstacles: List[Obstacle],
+        static_obstacles: List["StaticObstacle"],
+        dynamic_obstacles: List[Union["DynamicObstacle", "SimulatedDynamicObstacle"]],
     ) -> ca.MX:
         symbolic_constraints = MX_vertcat(
             self._get_symbolic_states_constraints(
@@ -390,12 +452,13 @@ class MotionPlanner:
             ).reshape((-1, 1)),
         )
 
-        if len(visible_obstacles) > 0:
+        if len(static_obstacles + dynamic_obstacles) > 0:
             symbolic_constraints = MX_vertcat(
                 symbolic_constraints,
-                self._get_symbolic_obstacle_constraints(visible_obstacles).reshape(
-                    (-1, 1)
-                ),
+                self._get_symbolic_obstacle_constraints(
+                    static_obstacles=static_obstacles,
+                    dynamic_obstacles=dynamic_obstacles,
+                ).reshape((-1, 1)),
             )
 
         return symbolic_constraints
@@ -464,8 +527,11 @@ class MotionPlanner:
         angular_velocity_bounds: Tuple[float, float],
         linear_acceleration_bounds: Tuple[float, float],
         angular_acceleration_bounds: Tuple[float, float],
+        static_obstacles: List["StaticObstacle"] = [],
+        dynamic_obstacles: List[
+            Union["DynamicObstacle", "SimulatedDynamicObstacle"]
+        ] = [],
         inflation_radius: Optional[float] = None,
-        obstacles: Optional[List[Obstacle]] = None,
     ):
         non_linear_program = {
             "x": self.symbolic_optimization_variables,
@@ -478,7 +544,8 @@ class MotionPlanner:
             "g": self._get_symbolic_constraints(
                 current_linear_velocity=current_linear_velocity,
                 current_angular_velocity=current_angular_velocity,
-                visible_obstacles=(obstacles if obstacles is not None else []),
+                static_obstacles=static_obstacles,
+                dynamic_obstacles=dynamic_obstacles,
             ),
             "p": self.symbolic_terminal_states_vector,
         }
@@ -502,7 +569,7 @@ class MotionPlanner:
             linear_velocity_bounds=linear_velocity_bounds,
             angular_velocity_bounds=angular_velocity_bounds,
             inflation_radius=(inflation_radius if inflation_radius is not None else 0),
-            num_obstacles=(len(obstacles) if obstacles is not None else 0),
+            num_obstacles=len(static_obstacles + dynamic_obstacles),
         )
 
         (

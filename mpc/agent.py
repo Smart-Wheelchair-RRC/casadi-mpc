@@ -1,10 +1,13 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Tuple, Union
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from mpc.dynamic_obstacle import DynamicObstacle, SimulatedDynamicObstacle
+    from mpc.obstacle import StaticObstacle
+
 from mpc.geometry import Circle
-from mpc.obstacle import Obstacle
 from mpc.planner import MotionPlanner
 
 
@@ -39,7 +42,11 @@ class Agent(ABC):
         self.avoid_obstacles = avoid_obstacles
 
         self.initial_state = np.array([*initial_position, initial_orientation])
-        self.goal_state = np.array([*goal_position, goal_orientation]) if goal_position else self.initial_state
+        self.goal_state = (
+            np.array([*goal_position, goal_orientation])
+            if goal_position
+            else self.initial_state
+        )
 
         self.horizon = horizon
 
@@ -47,8 +54,12 @@ class Agent(ABC):
 
         self.linear_velocity_bounds: Tuple[float, float] = linear_velocity_bounds
         self.angular_velocity_bounds: Tuple[float, float] = angular_velocity_bounds
-        self.linear_acceleration_bounds: Tuple[float, float] = linear_acceleration_bounds
-        self.angular_acceleration_bounds: Tuple[float, float] = angular_acceleration_bounds
+        self.linear_acceleration_bounds: Tuple[float, float] = (
+            linear_acceleration_bounds
+        )
+        self.angular_acceleration_bounds: Tuple[float, float] = (
+            angular_acceleration_bounds
+        )
 
         self.left_right_lane_bounds: Tuple[float, float] = left_right_lane_bounds
 
@@ -134,7 +145,13 @@ class EgoAgent(Agent):
             use_warm_start=use_warm_start,
         )
 
-    def step(self, obstacles: Optional[List[Obstacle]] = None):
+    def step(
+        self,
+        static_obstacles: List["StaticObstacle"] = [],
+        dynamic_obstacles: List[
+            Union["DynamicObstacle", "SimulatedDynamicObstacle"]
+        ] = [],
+    ):
         if not self.use_warm_start:
             self.reset(matrices_only=True, to_initial_state=False)
         self.states_matrix, self.controls_matrix = self.planner.solve(
@@ -149,8 +166,9 @@ class EgoAgent(Agent):
             angular_velocity_bounds=self.angular_velocity_bounds,
             linear_acceleration_bounds=self.linear_acceleration_bounds,
             angular_acceleration_bounds=self.angular_acceleration_bounds,
-            inflation_radius=(self.geometry.radius + 0.3),
-            obstacles=obstacles if self.avoid_obstacles else None,
+            inflation_radius=(self.geometry.radius + 0.4),
+            static_obstacles=static_obstacles,
+            dynamic_obstacles=dynamic_obstacles,
         )
         self.geometry.location = self.state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
