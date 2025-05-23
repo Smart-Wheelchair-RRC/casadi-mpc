@@ -60,7 +60,7 @@ class ROSInterface(Node):
         # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
         self.create_subscription(Path, "/plan", self.waypoint_callback, 10)
         self.subscription = self.create_subscription(
-            OccupancyGrid, "/global_costmap/costmap", self.obstacle_callback, 10
+            OccupancyGrid, "/local_costmap/costmap", self.obstacle_callback, 10
         )
         # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
         self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
@@ -80,11 +80,11 @@ class ROSInterface(Node):
         self.environment.step()
         self.future_states_pub()
 
-        control_command = Twist()
-        control_command.linear.x = self.environment.agent.linear_velocity
-        control_command.angular.z = self.environment.agent.angular_velocity
+        # control_command = Twist()
+        # control_command.linear.x = self.environment.agent.linear_velocity
+        # control_command.angular.z = self.environment.agent.angular_velocity
 
-        self.velocity_publisher.publish(control_command)
+        # self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()
@@ -146,8 +146,14 @@ class ROSInterface(Node):
             message.info.height, message.info.width
         )
         circle_locations = get_circle_locations_from_occupancy_map(
-            occupancy_map, ego_position=tuple(self.environment.agent.intial_state[:2])
+            occupancy_map, ego_position=tuple(self.environment.agent.initial_state[:2])
         )
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots()
+        # im = ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
+
+        # plt.show()
+        print(circle_locations)
 
         static_obstacle_list = []
 

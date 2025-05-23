@@ -16,6 +16,8 @@ def get_circle_locations_from_occupancy_map(
     sector_angle: int = 5,
     field_of_view: int = 240,
     max_circles: int = 40,
+    occupancy_map_width: float = 6.0,
+    occupancy_map_height: float = 6.0,
     ego_position: tuple[int, int] = (0, 0),
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     """
@@ -26,18 +28,24 @@ def get_circle_locations_from_occupancy_map(
     circles = []
 
     # Get the center of the occupancy map
-    center_x = map.shape[1] // 2
-    center_y = map.shape[0] // 2
+    center_x = occupancy_map_width // 2
+    center_y = occupancy_map_height // 2
 
     # Convert all occupied cell coordinates to polar form
     occupied_cells = np.argwhere(map == 100)
+    
+    # Convert occupancy map coordinates to real world coordinates
+    occupied_cells[:, 0] = (occupied_cells[:, 0] / map.shape[0]) * occupancy_map_height
+    occupied_cells[:, 1] = (occupied_cells[:, 1] / map.shape[1]) * occupancy_map_width
+
+
     occupied_cells_polar = occupied_cells - np.array([center_y, center_x])
     occupied_cells_polar = occupied_cells_polar.astype(float)
     occupied_cells_polar_angles = np.arctan2(
         occupied_cells_polar[:, 0], occupied_cells_polar[:, 1]
     )
 
-    occupied_cells_polar_distances = np.linalg.norm(occupied_cells_polar, axis=1)
+    occupied_cells_polar_distances = np.linalg.norm(occupied_cells_polar, axis=1) 
     occupied_cells_polar = np.column_stack(
         (occupied_cells_polar_angles, occupied_cells_polar_distances)
     )
@@ -47,7 +55,7 @@ def get_circle_locations_from_occupancy_map(
 
     # Get the angle of the ego agent
     # Assuming the ego agent is facing east, the angle is 0 degrees
-    ego_angle = 90  # degrees
+    ego_angle = 90+45  # degrees
     # Convert to radians
     ego_angle_rad = np.deg2rad(ego_angle)
 
