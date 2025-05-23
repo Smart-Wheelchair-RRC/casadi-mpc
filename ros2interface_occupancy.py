@@ -145,7 +145,9 @@ class ROSInterface(Node):
         occupancy_map = np.array(message.data).reshape(
             message.info.height, message.info.width
         )
-        circle_locations = get_circle_locations_from_occupancy_map(occupancy_map)
+        circle_locations = get_circle_locations_from_occupancy_map(
+            occupancy_map, ego_position=tuple(self.environment.agent.intial_state[:2])
+        )
 
         static_obstacle_list = []
 

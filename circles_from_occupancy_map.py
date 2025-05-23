@@ -16,6 +16,7 @@ def get_circle_locations_from_occupancy_map(
     sector_angle: int = 5,
     field_of_view: int = 240,
     max_circles: int = 40,
+    ego_position: tuple[int, int] = (0, 0),
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     """
     Get lines from occupancy map that cover the frontier assuming the center to be ego agent.
@@ -93,9 +94,9 @@ def get_circle_locations_from_occupancy_map(
             # Convert back to cartesian coordinates
             closest_points_cartesian = (
                 closest_points[:, 1] * np.cos(closest_points[:, 0] + ego_angle_rad)
-                + center_x,
+                + ego_position[0],
                 closest_points[:, 1] * np.sin(closest_points[:, 0] + ego_angle_rad)
-                + center_y,
+                + ego_position[1],
             )
 
             circles += list(
@@ -129,6 +130,8 @@ if __name__ == "__main__":
             # Visualize the occupancy map message of type /local_costmap/costmap nav_msgs/msg/OccupancyGrid using matplotlib
             print(f"Timestamp: {timestamp}")
 
+            print(msg)
+
             occupancy_map_width = msg.info.width
             occupancy_map_height = msg.info.height
             occupancy_map = np.array(msg.data).reshape(
@@ -148,8 +151,8 @@ if __name__ == "__main__":
                 # Draw the lines on the occupancy map
                 circle_x, circle_y = circle
                 ax.plot(
-                    circle_x,
-                    circle_y,
+                    circle_x + occupancy_map_width // 2,
+                    circle_y + occupancy_map_height // 2,
                     marker="o",
                     markerfacecolor="none",
                     markeredgecolor="red",
