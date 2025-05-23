@@ -267,15 +267,15 @@ class Plotter:
             self.obstacle_patches.append(
                 plt.gca().add_patch(obstacle.geometry.create_patch())
             )
-            self.obstacle_plots.append(
-                plt.gca().plot(
-                    obstacle.states_matrix[0, 1:],
-                    obstacle.states_matrix[1, 1:],
-                    marker=".",
-                    color="green",
-                    # s=1.5,
-                )[0]
-            )
+            # self.obstacle_plots.append(
+            #     plt.gca().plot(
+            #         obstacle.states_matrix[0, 1:],
+            #         obstacle.states_matrix[1, 1:],
+            #         marker=".",
+            #         color="green",
+            #         # s=1.5,
+            #     )[0]
+            # )
 
         # for index, obstacle in enumerate(self.static_obstacles):
         # self.static_obstacle_ids[index].set_position(

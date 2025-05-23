@@ -210,7 +210,7 @@ class ROSEnvironment(Environment):
         print("Number of Dyn Obstacles:", len(filtered_dynamic_obstacles))
 
         self.agent.step(
-            static_obstacles=filtered_static_obstacles[:4],
+            static_obstacles=filtered_static_obstacles,
             dynamic_obstacles=filtered_dynamic_obstacles,
         )
 
