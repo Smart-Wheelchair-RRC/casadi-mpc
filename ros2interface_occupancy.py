@@ -147,8 +147,10 @@ class ROSInterface(Node):
         )
         circle_locations = get_circle_locations_from_occupancy_map(occupancy_map)
 
+        static_obstacle_list = []
+
         for i, point in enumerate(circle_locations):
-            self.static_obstacle_list.append(
+            static_obstacle_list.append(
                 StaticObstacle(
                     id=i,
                     geometry=Circle(
@@ -157,6 +159,8 @@ class ROSInterface(Node):
                     ),
                 )
             )
+
+        self.static_obstacle_list = static_obstacle_list
 
     # def obstacle_callback(self, msg: OccupancyGrid):
     #     if self.counter == 0:
