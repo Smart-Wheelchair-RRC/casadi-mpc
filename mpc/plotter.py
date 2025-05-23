@@ -31,7 +31,7 @@ class Plotter:
 
         self.num_frames = 0
 
-        self.PLOT_SIZE_DELTA = 10
+        self.PLOT_SIZE_DELTA = 3
 
         # Create the plot
         _, axes = plt.subplots()
@@ -45,7 +45,7 @@ class Plotter:
         self.agent_id = axes.text(
             self.agent.state[0],
             self.agent.state[1],
-            f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})",
+            "",
             fontsize=12,
             color="black",
         )
@@ -76,7 +76,7 @@ class Plotter:
             axes.text(
                 obstacle.state[0],
                 obstacle.state[1],
-                f"Obstacle {obstacle.id}",
+                "",
                 fontsize=12,
                 color="black",
             )
@@ -194,9 +194,9 @@ class Plotter:
         self.agent.geometry.update_patch(self.agent_patch)
 
         self.agent_id.set_position((self.agent.state[0], self.agent.state[1]))
-        self.agent_id.set_text(
-            f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})"
-        )
+        # self.agent_id.set_text(
+        #     f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})"
+        # )
 
         for index, obstacle in enumerate(self.dynamic_obstacles):
             self.dynamic_obstacle_ids[index].set_position(
