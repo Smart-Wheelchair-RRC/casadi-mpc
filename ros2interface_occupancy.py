@@ -2,6 +2,7 @@
 from typing import List, cast
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import rclpy
 import tf2_ros
@@ -75,6 +76,9 @@ class ROSInterface(Node):
 
         self.timer = self.create_timer(0.01, self.run)
 
+        # Plot for occupancy map with circles
+        self.fig, self.ax = plt.subplots()
+
     def run(self):
         self.environment.static_obstacles = self.static_obstacle_list
         self.environment.step()
@@ -146,14 +150,46 @@ class ROSInterface(Node):
             message.info.height, message.info.width
         )
         circle_locations = get_circle_locations_from_occupancy_map(
-            occupancy_map, ego_position=tuple(self.environment.agent.initial_state[:2])
+            occupancy_map,
+            ego_position=(
+                message.info.origin.position.x,
+                message.info.origin.position.y,
+            ),
+            occupancy_map_resolution=message.info.resolution,
         )
         # import matplotlib.pyplot as plt
         # fig, ax = plt.subplots()
-        # im = ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
+        im = self.ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
+
+        # Convert circle locations to occupancy map coordinates
+        circle_locations_for_plotting = [
+            (
+                int(
+                    (point[0] - message.info.origin.position.x)
+                    / message.info.resolution
+                ),
+                int(
+                    (point[1] - message.info.origin.position.y)
+                    / message.info.resolution
+                ),
+            )
+            for point in circle_locations
+        ]
+
+        for circle in circle_locations_for_plotting:
+            # Draw the lines on the occupancy map
+            circle_x, circle_y = circle
+            self.ax.plot(
+                circle_x + message.info.width // 2,
+                circle_y + message.info.height // 2,
+                marker="o",
+                markerfacecolor="none",
+                markeredgecolor="red",
+                markersize=10,
+            )
 
         # plt.show()
-        print(circle_locations)
+        # print(circle_locations)
 
         static_obstacle_list = []
 
