@@ -131,6 +131,32 @@ class ROSInterface(Node):
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             pass
 
+    # def obstacle_callback(self, msg: OccupancyGrid):
+    #         width = msg.info.width
+    #         height = msg.info.height
+    #         resolution = msg.info.resolution
+    #         origin = msg.info.origin
+
+    #         grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+    #         binary = np.uint8((grid > 50) * 255)
+
+    #         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    #         self.static_obstacle_list = []
+
+    #         for contour in contours:
+    #             if len(contour) >= 3:
+    #                 polygon = []
+    #                 for pt in contour:
+    #                     x = pt[0][0] * resolution + origin.position.x
+    #                     y = pt[0][1] * resolution + origin.position.y
+    #                     polygon.append((x, y))
+    #                 self.static_obstacle_list.append(
+    #                     StaticObstacle(
+    #                         id=len(self.static_obstacle_list),
+    #                         geometry=Polygon(vertices=polygon)
+    #                     )
+    #                 )
     def obstacle_callback(self, msg: OccupancyGrid):
         if self.counter == 0:
             width = msg.info.width
