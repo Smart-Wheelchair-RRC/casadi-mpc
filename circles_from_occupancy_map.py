@@ -21,6 +21,7 @@ def get_circle_locations_from_occupancy_map(
     occupancy_map_height: int = 120,
     ego_position: tuple[int, int] = (0, 0),
     ego_angle: int = 90,
+    rotation_angle: int = 0,
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     """
     Get lines from occupancy map that cover the frontier assuming the center to be ego agent.
@@ -75,6 +76,8 @@ def get_circle_locations_from_occupancy_map(
     if total_points == 0:
         return []
 
+    rotation_angle_rad = np.deg2rad(rotation_angle)
+
     # Each sector gets minimum 1 circle, and the rest are distributed based on point density
 
     # Divide the points into 30 degree sectors
@@ -95,9 +98,9 @@ def get_circle_locations_from_occupancy_map(
 
             # Convert back to cartesian coordinates
             closest_points_cartesian = (
-                closest_points[:, 1] * np.cos(closest_points[:, 0] + ego_angle_rad)
+                closest_points[:, 1] * np.cos(closest_points[:, 0] + ego_angle_rad - rotation_angle_rad)
                 + ego_position[0],
-                closest_points[:, 1] * np.sin(closest_points[:, 0] + ego_angle_rad)
+                closest_points[:, 1] * np.sin(closest_points[:, 0] + ego_angle_rad - rotation_angle_rad)
                 + ego_position[1],
             )
 
