@@ -3,6 +3,7 @@ from typing import List, cast
 
 import cv2
 import matplotlib.pyplot as plt
+import message_filters
 import numpy as np
 import rclpy
 import tf2_ros
@@ -53,34 +54,38 @@ class ROSInterface(Node):
             waypoints=[],
             plot=True,
         )
-        # self.counter = 0
 
         self.tfbuffer = Buffer()
-        self.listener = TransformListener(self.tfbuffer, self)
 
-        # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
+        # SUBSCRIBERS
         self.create_subscription(Path, "/plan", self.waypoint_callback, 10)
-        self.subscription = self.create_subscription(
-            OccupancyGrid, "/local_costmap/costmap", self.obstacle_callback, 10
+        occupancy_map_subscriber = message_filters.Subscriber(
+            "/local_costmap/costmap", OccupancyGrid
         )
-        # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
-        self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
+        odometry_subscriber = message_filters.Subscriber("/odom", Odometry)
 
+        time_synchronizer = message_filters.ApproximateTimeSynchronizer(
+            [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=0.1
+        )
+        time_synchronizer.registerCallback(self.planning_callback)
+
+        # PUBLISHERS
         self.velocity_publisher = self.create_publisher(
             Twist, "/wheelchair2_base_controller/cmd_vel_unstamped", 10
         )
         self.marker_publisher = self.create_publisher(MarkerArray, "/future_states", 10)
 
-        self.static_obstacle_list = []
         self.waypoints = []
 
         self.timer = self.create_timer(0.01, self.run)
 
-        # Plot for occupancy map with circles
-        # self.fig, self.ax = plt.subplots()
+    def planning_callback(
+        self, occupancy_map_msg: OccupancyGrid, odometry_msg: Odometry
+    ):
+        self.obstacle_callback(occupancy_map_msg)
+        self.odometry_callback(odometry_msg)
 
     def run(self):
-        self.environment.static_obstacles = self.static_obstacle_list
         self.environment.step()
         self.future_states_pub()
 
@@ -118,7 +123,7 @@ class ROSInterface(Node):
 
         self.marker_publisher.publish(marker_array)
 
-    def odom_callback(self, message: Odometry):
+    def odometry_callback(self, message: Odometry):
         try:
             trans = self.tfbuffer.lookup_transform(
                 "map", "base_link", rclpy.time.Time()
@@ -151,48 +156,9 @@ class ROSInterface(Node):
         )
         circle_locations = get_circle_locations_from_occupancy_map(
             occupancy_map,
-            ego_position=tuple(
-                self.environment.agent.initial_state[:2]
-            ),
+            ego_position=tuple(self.environment.agent.initial_state[:2]),
             occupancy_map_resolution=message.info.resolution,
         )
-        # import matplotlib.pyplot as plt
-        # fig, ax = plt.subplots()
-        # self.ax.clear()  # Clear the axis for the next iteration
-
-        # im = self.ax.imshow(occupancy_map, cmap="gray", interpolation="nearest")
-
-        # # Convert circle locations to occupancy map coordinates
-        # circle_locations_for_plotting = [
-        #     (
-        #         int(
-        #             (point[0] - message.info.origin.position.x)
-        #             / message.info.resolution
-        #         ),
-        #         int(
-        #             (point[1] - message.info.origin.position.y)
-        #             / message.info.resolution
-        #         ),
-        #     )
-        #     for point in circle_locations
-        # ]
-
-        # for circle in circle_locations_for_plotting:
-        #     # Draw the lines on the occupancy map
-        #     circle_x, circle_y = circle
-        #     self.ax.plot(
-        #         circle_x + message.info.width // 2,
-        #         circle_y + message.info.height // 2,
-        #         marker="o",
-        #         markerfacecolor="none",
-        #         markeredgecolor="red",
-        #         markersize=10,
-        #     )
-        
-        # plt.pause(0.1)
-
-        # plt.show()
-        # print(circle_locations)
 
         static_obstacle_list = []
 
@@ -206,75 +172,11 @@ class ROSInterface(Node):
                     ),
                 )
             )
-
-        self.static_obstacle_list = static_obstacle_list
-
-    # def obstacle_callback(self, msg: OccupancyGrid):
-    #     if self.counter == 0:
-    #         width = msg.info.width
-    #         height = msg.info.height
-    #         resolution = msg.info.resolution
-    #         origin = msg.info.origin
-
-    #         grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
-    #         binary = np.uint8((grid > 50) * 255)
-
-    #         contours, _ = cv2.findContours(
-    #             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    #         )
-
-    #         self.static_obstacle_list = []
-
-    #         for contour in contours:
-    #             if len(contour) >= 3:
-    #                 polygon = []
-    #                 for pt in contour:
-    #                     x = pt[0][0] * resolution + origin.position.x
-    #                     y = pt[0][1] * resolution + origin.position.y
-    #                     polygon.append((x, y))
-    #                 self.static_obstacle_list.append(
-    #                     StaticObstacle(
-    #                         id=len(self.static_obstacle_list),
-    #                         geometry=Polygon(vertices=polygon),
-    #                     )
-    #                 )
-    #         self.counter += 1
-
-    # def obstacle_callback(self, message: ObstacleArrayMsg):
-    #     if self.counter == 0:
-    #         self.static_obstacle_list = []
-    #         for obstacle in message.obstacles:
-    #             if len(obstacle.polygon.points[:-1]) > 2:
-    #                 points = [
-    #                     (point.x, point.y)
-    #                     for point in cast(List[Point32], obstacle.polygon.points[:-1])
-    #                 ]
-    #             else:
-    #                 continue
-    #             self.static_obstacle_list.append(
-    #                 StaticObstacle(
-    #                     id=obstacle.id,
-    #                     geometry=Polygon(vertices=points),
-    #                 )
-    #             )
-    #         self.counter += 1
-
-    # def people_callback(self, message: PeopleVelocity):
-    #     dynamic_obstacle_list: List[DynamicObstacle] = []
-    #     for person in message.people:
-    #         dynamic_obstacle_list.append(
-    #             DynamicObstacle(
-    #                 id=person.id,
-    #                 position=(person.pose.position.x, person.pose.position.y),
-    #                 orientation=np.rad2deg(np.arctan2(person.velocity_y, person.velocity_x)),
-    #                 linear_velocity=(person.velocity_x**2 + person.velocity_y**2)**0.5,
-    #                 angular_velocity=0,
-    #                 horizon=10,
-    #             )
-    #         )
-    #     self.environment.dynamic_obstacles = dynamic_obstacle_list
+        # Update the environment with the latest static obstacles
+        self.environment.static_obstacles = static_obstacle_list
 
     def waypoint_callback(self, message: Path):
+        # Check if the last waypoint is close to the current position
         try:
             diff = np.array(self.waypoints[-1]) - np.array(
                 (
@@ -291,9 +193,10 @@ class ROSInterface(Node):
                 )
             )
             diff = diff.sum()
-        except:
+        except Exception:
             diff = 0
 
+        # If there are no waypoints or the last waypoint is not close to the current position, update the waypoints
         if self.waypoints == [] or abs(diff) > 0.1:
             waypoints = [
                 # (
