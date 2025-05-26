@@ -2,14 +2,16 @@
 import message_filters
 import numpy as np
 import rclpy
+import rclpy.duration
 import tf2_ros
+from tf2_geometry_msgs import do_transform_pose_stamped
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.node import Node
 from scipy.spatial.transform import (
     Rotation as R,  # Replacement for tf_transformations from ROS1
 )
-from tf2_ros import Buffer
+from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from circles_from_occupancy_map import get_circle_locations_from_occupancy_map
@@ -17,10 +19,11 @@ from mpc.agent import EgoAgent
 from mpc.environment import ROSEnvironment
 from mpc.geometry import Circle
 from mpc.obstacle import StaticObstacle
+import cv2
+from mpc.geometry import Polygon
 
-
-def euler_from_quaternion(quat):
-    return R.from_quat(quat).as_euler("xyz")
+def euler_from_quaternion(quat, degrees = False):
+    return R.from_quat(quat).as_euler("xyz", degrees=degrees)
 
 
 class ROSInterface(Node):
@@ -34,10 +37,10 @@ class ROSInterface(Node):
                 initial_position=(0, 0),
                 initial_orientation=np.deg2rad(90),
                 horizon=5,
-                use_warm_start=True,
+                use_warm_start=False,
                 planning_time_step=0.8,
                 linear_velocity_bounds=(0, 0.25),
-                angular_velocity_bounds=(-0.25, 0.25),
+                angular_velocity_bounds=(-0.5, 0.5),
                 linear_acceleration_bounds=(-0.5, 0.5),
                 angular_acceleration_bounds=(-1, 1),
                 sensor_radius=3,
@@ -48,17 +51,21 @@ class ROSInterface(Node):
             plot=True,
         )
 
-        self.tfbuffer = Buffer()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # SUBSCRIBERS
         self.create_subscription(Path, "/plan", self.waypoint_callback, 10)
+
+        # self.create_subscription(OccupancyGrid, "/local_costmap/costmap", self.obstacle_callback, 10    )
+        
         occupancy_map_subscriber = message_filters.Subscriber(
-            "/local_costmap/costmap", OccupancyGrid
+            self, OccupancyGrid, "/local_costmap/costmap"
         )
-        odometry_subscriber = message_filters.Subscriber("/odom", Odometry)
+        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/wheelchair2_base_controller/odom")
 
         time_synchronizer = message_filters.ApproximateTimeSynchronizer(
-            [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=0.1
+            [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=1
         )
         time_synchronizer.registerCallback(self.planning_callback)
 
@@ -75,16 +82,44 @@ class ROSInterface(Node):
     def planning_callback(
         self, occupancy_map_msg: OccupancyGrid, odometry_msg: Odometry
     ):
+        print("I AM RUNNING")
         self.obstacle_callback(occupancy_map_msg)
         self.odometry_callback(odometry_msg)
 
     def run(self):
+        if not self.waypoints:
+            return
+        # try:
+        #     trans = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time())
+        #     # trans_odom = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time())
+        #     self.environment.agent.initial_state = np.array([
+        #         trans.transform.translation.x,
+        #         trans.transform.translation.y,
+        #         euler_from_quaternion([
+        #             trans.transform.rotation.x,
+        #             trans.transform.rotation.y,
+        #             trans.transform.rotation.z,
+        #             trans.transform.rotation.w,
+        #         ])[2],
+        #     ])
+        #     self.environment.agent.reset(matrices_only=True)
+        # except Exception as e:
+        #     print(e)
+
         self.environment.step()
         self.future_states_pub()
 
         control_command = Twist()
+        
+        # if np.linalg.norm(self.environment.agent.state[:2] - self.environment.agent.initial_state[:2]) > 0.25:
+        #     print("Too close for comfort")
+        #     control_command.linear.x = 0.0
+        #     control_command.angular.z = self.environment.agent.angular_velocity
+        # else: 
         control_command.linear.x = self.environment.agent.linear_velocity
         control_command.angular.z = self.environment.agent.angular_velocity
+
+        print(control_command.linear.x, control_command.angular.z)
 
         self.velocity_publisher.publish(control_command)
 
@@ -116,41 +151,103 @@ class ROSInterface(Node):
 
         self.marker_publisher.publish(marker_array)
 
+    
+
     def odometry_callback(self, message: Odometry):
-        try:
-            trans = self.tfbuffer.lookup_transform(
-                "map", "base_link", rclpy.time.Time()
-            )
-            self.environment.agent.initial_state = np.array(
-                [
-                    trans.transform.translation.x,
-                    trans.transform.translation.y,
-                    euler_from_quaternion(
-                        [
-                            trans.transform.rotation.x,
-                            trans.transform.rotation.y,
-                            trans.transform.rotation.z,
-                            trans.transform.rotation.w,
-                        ]
-                    )[2],
-                ]
-            )
-            self.environment.agent.reset(matrices_only=True)
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ):
-            pass
+        pose = message.pose.pose
+        self.environment.agent.initial_state = np.array(
+            [
+                pose.position.x,
+                pose.position.y,
+                euler_from_quaternion(
+                    [
+                        pose.orientation.x,
+                        pose.orientation.y,
+                        pose.orientation.z,
+                        pose.orientation.w,
+                    ]
+                )[2],
+            ]
+        )
+        self.environment.agent.reset(matrices_only=True)
+
+        print(self.environment.agent.state)
+        # try:
+        #     trans = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        #     self.environment.agent.initial_state = np.array([
+        #         trans.transform.translation.x,
+        #         trans.transform.translation.y,
+        #         euler_from_quaternion([
+        #             trans.transform.rotation.x,
+        #             trans.transform.rotation.y,
+        #             trans.transform.rotation.z,
+        #             trans.transform.rotation.w,
+        #         ])[2],
+        #     ])
+        # except (
+        #     tf2_ros.LookupException,
+        #     tf2_ros.ConnectivityException,
+        #     tf2_ros.ExtrapolationException,
+        # ) as e:
+        #     print(e)
+
+    # def obstacle_callback(self, msg: OccupancyGrid):
+    #     width = msg.info.width
+    #     height = msg.info.height
+    #     resolution = msg.info.resolution
+    #     origin = msg.info.origin
+
+    #     grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+    #     binary = np.uint8((grid > 50) * 255)
+
+    #     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    #     self.static_obstacle_list = []
+
+    #     for contour in contours:
+    #         if len(contour) >= 3:
+    #             polygon = []
+    #             for pt in contour:
+    #                 x = pt[0][0] * resolution + origin.position.x
+    #                 y = pt[0][1] * resolution + origin.position.y
+    #                 polygon.append((x, y))
+    #             self.static_obstacle_list.append(
+    #                 StaticObstacle(
+    #                     id=len(self.static_obstacle_list),
+    #                     geometry=Polygon(vertices=polygon)
+    #                 )
+    #             )
 
     def obstacle_callback(self, message: OccupancyGrid):
         occupancy_map = np.array(message.data).reshape(
             message.info.height, message.info.width
         )
+
+        try:
+            trans = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time())
+            trans_map_odom = self.tf_buffer.lookup_transform("odom", "map", rclpy.time.Time())
+            rotation = euler_from_quaternion([
+                    trans.transform.rotation.x,
+                    trans.transform.rotation.y,
+                    trans.transform.rotation.z,
+                    trans.transform.rotation.w,
+                ], degrees=True)[2]
+            rotation_map_odom = euler_from_quaternion([
+                    trans_map_odom.transform.rotation.x,
+                    trans_map_odom.transform.rotation.y,
+                    trans_map_odom.transform.rotation.z,
+                    trans_map_odom.transform.rotation.w,
+                ], degrees=True)[2]
+        except Exception as e:
+            print(e)
+            return
+
         circle_locations = get_circle_locations_from_occupancy_map(
             occupancy_map,
-            ego_position=tuple(self.environment.agent.initial_state[:2]),
+            ego_position=(trans.transform.translation.x, trans.transform.translation.y),
             occupancy_map_resolution=message.info.resolution,
+            ego_angle=rotation,
+            rotation_angle=rotation_map_odom,
         )
 
         static_obstacle_list = []
@@ -169,18 +266,29 @@ class ROSInterface(Node):
         self.environment.static_obstacles = static_obstacle_list
 
     def waypoint_callback(self, message: Path):
+        try:
+            transform = self.tf_buffer.lookup_transform("odom", "map", rclpy.time.Time())
+        except Exception as e:
+            print(e)
+            return
+        
+        poses = [
+            do_transform_pose_stamped(pose, transform)
+            for pose in message.poses
+        ]
+
         # Check if the last waypoint is close to the current position
         try:
             diff = np.array(self.waypoints[-1]) - np.array(
                 (
-                    message.poses[-1].pose.position.x,
-                    message.poses[-1].pose.position.y,
+                    poses[-1].pose.position.x,
+                    poses[-1].pose.position.y,
                     euler_from_quaternion(
                         [
-                            message.poses[-1].pose.orientation.x,
-                            message.poses[-1].pose.orientation.y,
-                            message.poses[-1].pose.orientation.z,
-                            message.poses[-1].pose.orientation.w,
+                            poses[-1].pose.orientation.x,
+                            poses[-1].pose.orientation.y,
+                            poses[-1].pose.orientation.z,
+                            poses[-1].pose.orientation.w,
                         ]
                     )[2],
                 )
@@ -191,6 +299,7 @@ class ROSInterface(Node):
 
         # If there are no waypoints or the last waypoint is not close to the current position, update the waypoints
         if self.waypoints == [] or abs(diff) > 0.1:
+            print("Updating goal")
             waypoints = [
                 # (
                 #     pose.pose.position.x,
@@ -208,14 +317,14 @@ class ROSInterface(Node):
             ]
             waypoints.append(
                 (
-                    message.poses[-1].pose.position.x,
-                    message.poses[-1].pose.position.y,
+                    poses[-1].pose.position.x,
+                    poses[-1].pose.position.y,
                     euler_from_quaternion(
                         [
-                            message.poses[-1].pose.orientation.x,
-                            message.poses[-1].pose.orientation.y,
-                            message.poses[-1].pose.orientation.z,
-                            message.poses[-1].pose.orientation.w,
+                            poses[-1].pose.orientation.x,
+                            poses[-1].pose.orientation.y,
+                            poses[-1].pose.orientation.z,
+                            poses[-1].pose.orientation.w,
                         ]
                     )[2],
                 )
