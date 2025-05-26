@@ -176,14 +176,14 @@ class ROSEnvironment(Environment):
     def step(self):
         if self.waypoint_index == len(self.waypoints) - 1:
             print("Heading for final goal")
-            self.agent.goal_radius = 0.1
+            self.agent.goal_radius = 0.5
             # self.agent.planner.update_orientation_weight(100)
         else:
             self.agent.goal_radius = 0.5
             # self.agent.planner.update_orientation_weight(0)
 
-        # if self.final_goal_reached:
-        #     print("Final Goal Reached")
+        if self.final_goal_reached:
+            print("Final Goal Reached")
         #     self.agent.planner.update_orientation_weight(100)
         # else:
         #     self.agent.planner.update_orientation_weight(0)
@@ -213,8 +213,9 @@ class ROSEnvironment(Environment):
         print("Number of Dyn Obstacles:", len(filtered_dynamic_obstacles))
 
         self.agent.step(
-            static_obstacles=filtered_static_obstacles[:40],
+            static_obstacles=filtered_static_obstacles,
             dynamic_obstacles=filtered_dynamic_obstacles,
+            state_override=True,
         )
 
         t2 = time.perf_counter()
