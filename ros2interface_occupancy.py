@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
-from typing import List, cast
-
-import cv2
-import matplotlib.pyplot as plt
 import message_filters
 import numpy as np
 import rclpy
 import tf2_ros
-from geometry_msgs.msg import Point32, Pose, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.node import Node
 from scipy.spatial.transform import (
     Rotation as R,  # Replacement for tf_transformations from ROS1
 )
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer
 from visualization_msgs.msg import Marker, MarkerArray
 
-# from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
-# from leg_tracker.msg import PeopleVelocity, PersonVelocity
 from circles_from_occupancy_map import get_circle_locations_from_occupancy_map
 from mpc.agent import EgoAgent
-from mpc.dynamic_obstacle import DynamicObstacle
 from mpc.environment import ROSEnvironment
 from mpc.geometry import Circle
 from mpc.obstacle import StaticObstacle
