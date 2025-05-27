@@ -84,7 +84,7 @@ class ROSInterface(Node):
         control_command.linear.x = self.environment.agent.linear_velocity
         control_command.angular.z = self.environment.agent.angular_velocity
 
-        self.velocity_publisher.publish(control_command)
+        # self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()

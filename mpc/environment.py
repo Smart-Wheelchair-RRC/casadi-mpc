@@ -209,7 +209,7 @@ class ROSEnvironment(Environment):
             if distance <= self.agent.sensor_radius
         ]
         print("Number of Static Obstacles:", len(self.static_obstacles))
-        print("Number of Static Obstacles:", len(filtered_static_obstacles))
+        print("Number of Filtered Static Obstacles:", len(filtered_static_obstacles))
         print("Number of Dyn Obstacles:", len(filtered_dynamic_obstacles))
 
         self.agent.step(

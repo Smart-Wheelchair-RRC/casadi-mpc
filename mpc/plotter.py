@@ -31,7 +31,7 @@ class Plotter:
 
         self.num_frames = 0
 
-        self.PLOT_SIZE_DELTA = 10
+        self.PLOT_SIZE_DELTA = 4
 
         # Create the plot
         _, axes = plt.subplots()
