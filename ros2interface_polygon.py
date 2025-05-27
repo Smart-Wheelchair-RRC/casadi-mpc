@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
-from typing import List, cast
-from visualization_msgs.msg import Marker, MarkerArray
+import message_filters
 import numpy as np
 import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Point32, Twist
-from nav_msgs.msg import Odometry, Path
-from scipy.spatial.transform import Rotation as R  # Replacement for tf_transformations from ROS1
-
-from mpc.agent import EgoAgent
-from mpc.dynamic_obstacle import DynamicObstacle
-from mpc.environment import ROSEnvironment
-from mpc.geometry import Polygon
-from mpc.obstacle import StaticObstacle
-
-from tf2_ros import TransformListener, Buffer
+import rclpy.duration
 import tf2_ros
+from tf2_geometry_msgs import do_transform_pose_stamped
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.node import Node
+from scipy.spatial.transform import (
+    Rotation as R,  # Replacement for tf_transformations from ROS1
+)
+from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
 
-import numpy as np
+from circles_from_occupancy_map import get_circle_locations_from_occupancy_map
+from mpc.agent import EgoAgent
+from mpc.environment import ROSEnvironment
+from mpc.geometry import Circle
+from mpc.obstacle import StaticObstacle
 import cv2
-from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import Pose
+from mpc.geometry import Polygon
 
-# from costmap_converter.msg import ObstacleArrayMsg, ObstacleMsg
-# from leg_tracker.msg import PeopleVelocity, PersonVelocity
 
-def euler_from_quaternion(quat):
+
+def euler_from_quaternion(quat, degree = False):
     return R.from_quat(quat).as_euler('xyz')
 
 class ROSInterface(Node):
@@ -57,16 +56,30 @@ class ROSInterface(Node):
         self.tfbuffer = Buffer()
         self.listener = TransformListener(self.tfbuffer, self)
 
+
+        #SUBSCRIBERS
         # self.create_subscription(PeopleVelocity, '/vel_pub', self.people_callback, 10)
         self.create_subscription(Path, '/plan', self.waypoint_callback, 10)
-        self.subscription = self.create_subscription(
-            OccupancyGrid,
-            '/global_costmap/costmap',
-            self.obstacle_callback,
-            10)
-        # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
-        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        # self.subscription = self.create_subscription(
+        #     OccupancyGrid,
+        #     '/local_costmap/costmap',
+        #     # self.obstacle_callback,
+        #     10)
+        # # self.create_subscription(ObstacleArrayMsg, '/costmap_converter/costmap_obstacles', self.obstacle_callback, 10)
+        # self.create_subscription(Odometry, '/wheelchair2_base_controller/odom', self.odom_callback, 10)
 
+        occupancy_map_subscriber = message_filters.Subscriber(
+            self, OccupancyGrid, "/local_costmap/costmap"
+        )
+        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/wheelchair2_base_controller/odom")
+
+        time_synchronizer = message_filters.ApproximateTimeSynchronizer(
+            [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=1
+        )
+        time_synchronizer.registerCallback(self.planning_callback)
+
+
+        # PUBLISHERS    
         self.velocity_publisher = self.create_publisher(Twist, '/wheelchair2_base_controller/cmd_vel_unstamped', 10)
         self.marker_publisher = self.create_publisher(MarkerArray, '/future_states', 10)
 
@@ -75,8 +88,16 @@ class ROSInterface(Node):
 
         self.timer = self.create_timer(0.01, self.run)
 
+    def planning_callback(
+            self, occupancy_map_msg: OccupancyGrid, odometry_msg: Odometry
+    ):
+        self.obstacle_callback(occupancy_map_msg)
+        self.odom_callback(odometry_msg)
+
     def run(self):
-        self.environment.static_obstacles = self.static_obstacle_list
+        if not self.waypoints:
+            return
+        # self.environment.static_obstacles = self.static_obstacle_list
         self.environment.step()
         self.future_states_pub()
 
@@ -84,7 +105,7 @@ class ROSInterface(Node):
         control_command.linear.x = self.environment.agent.linear_velocity
         control_command.angular.z = self.environment.agent.angular_velocity
 
-        self.velocity_publisher.publish(control_command)
+        # self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()
@@ -115,23 +136,68 @@ class ROSInterface(Node):
         self.marker_publisher.publish(marker_array)
 
     def odom_callback(self, message: Odometry):
-        try:
-            trans = self.tfbuffer.lookup_transform("map", "base_link", rclpy.time.Time())
-            self.environment.agent.initial_state = np.array([
-                trans.transform.translation.x,
-                trans.transform.translation.y,
-                euler_from_quaternion([
-                    trans.transform.rotation.x,
-                    trans.transform.rotation.y,
-                    trans.transform.rotation.z,
-                    trans.transform.rotation.w,
-                ])[2],
-            ])
-            self.environment.agent.reset(matrices_only=True)
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-            pass
+        pose = message.pose.pose
+        self.environment.agent.initial_state = np.array(
+            [
+                pose.position.x,
+                pose.position.y,
+                euler_from_quaternion(
+                    [
+                        pose.orientation.x,
+                        pose.orientation.y,
+                        pose.orientation.z,
+                        pose.orientation.w,
+                    ]
+                )[2],
+            ]
+        )
+        self.environment.agent.reset(matrices_only=True)
 
+        # try:
+        #     trans = self.tfbuffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        #     self.environment.agent.initial_state = np.array([
+        #         trans.transform.translation.x,
+        #         trans.transform.translation.y,
+        #         euler_from_quaternion([
+        #             trans.transform.rotation.x,
+        #             trans.transform.rotation.y,
+        #             trans.transform.rotation.z,
+        #             trans.transform.rotation.w,
+        #         ])[2],
+        #     ])
+        #     self.environment.agent.reset(matrices_only=True)
+        # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        #     pass
+
+    def obstacle_callback(self, msg: OccupancyGrid):
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+        origin = msg.info.origin
+
+        grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+        binary = np.uint8((grid > 50) * 255)
+
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        self.static_obstacle_list = []
+
+        for contour in contours:
+            if len(contour) >= 3:
+                polygon = []
+                for pt in contour:
+                    x = pt[0][0] * resolution + origin.position.x
+                    y = pt[0][1] * resolution + origin.position.y
+                    polygon.append((x, y))
+                self.static_obstacle_list.append(
+                    StaticObstacle(
+                        id=len(self.static_obstacle_list),
+                        geometry=Polygon(vertices=polygon)
+                    )
+                )
+        self.environment.static_obstacles = self.static_obstacle_list
     # def obstacle_callback(self, msg: OccupancyGrid):
+    #     if self.counter == 0:
     #         width = msg.info.width
     #         height = msg.info.height
     #         resolution = msg.info.resolution
@@ -157,34 +223,7 @@ class ROSInterface(Node):
     #                         geometry=Polygon(vertices=polygon)
     #                     )
     #                 )
-    def obstacle_callback(self, msg: OccupancyGrid):
-        if self.counter == 0:
-            width = msg.info.width
-            height = msg.info.height
-            resolution = msg.info.resolution
-            origin = msg.info.origin
-
-            grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
-            binary = np.uint8((grid > 50) * 255)
-
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            self.static_obstacle_list = []
-
-            for contour in contours:
-                if len(contour) >= 3:
-                    polygon = []
-                    for pt in contour:
-                        x = pt[0][0] * resolution + origin.position.x
-                        y = pt[0][1] * resolution + origin.position.y
-                        polygon.append((x, y))
-                    self.static_obstacle_list.append(
-                        StaticObstacle(
-                            id=len(self.static_obstacle_list),
-                            geometry=Polygon(vertices=polygon)
-                        )
-                    )
-            self.counter += 1
+    #         self.counter += 1
 
 
     # def obstacle_callback(self, message: ObstacleArrayMsg):
@@ -221,12 +260,6 @@ class ROSInterface(Node):
     #         )
     #     self.environment.dynamic_obstacles = dynamic_obstacle_list
 
-    def waypoint_callback(self, message: Path):
-        try:
-            diff
-        except:
-            diff = 0
-    
     def waypoint_callback(self, message: Path):
         try:
             diff = np.array(self.waypoints[-1]) - np.array((
