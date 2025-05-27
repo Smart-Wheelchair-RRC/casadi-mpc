@@ -3,6 +3,7 @@ import message_filters
 import numpy as np
 import rclpy
 import rclpy.duration
+import rclpy.time
 import tf2_ros
 from tf2_geometry_msgs import do_transform_pose_stamped
 from geometry_msgs.msg import Twist
@@ -40,7 +41,7 @@ class ROSInterface(Node):
                 horizon=5,
                 use_warm_start=True,
                 planning_time_step=0.8,
-                linear_velocity_bounds=(0, 0.25),
+                linear_velocity_bounds=(-0.25, 0.25),
                 angular_velocity_bounds=(-0.25, 0.25),
                 linear_acceleration_bounds=(-0.5, 0.5),
                 angular_acceleration_bounds=(-1, 1),
@@ -53,8 +54,8 @@ class ROSInterface(Node):
         )
         self.counter = 0
 
-        self.tfbuffer = Buffer()
-        self.listener = TransformListener(self.tfbuffer, self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
 
         #SUBSCRIBERS
@@ -97,7 +98,7 @@ class ROSInterface(Node):
     def run(self):
         if not self.waypoints:
             return
-        # self.environment.static_obstacles = self.static_obstacle_list
+        self.environment.static_obstacles = self.static_obstacle_list
         self.environment.step()
         self.future_states_pub()
 
@@ -105,7 +106,7 @@ class ROSInterface(Node):
         control_command.linear.x = self.environment.agent.linear_velocity
         control_command.angular.z = self.environment.agent.angular_velocity
 
-        # self.velocity_publisher.publish(control_command)
+        self.velocity_publisher.publish(control_command)
 
     def future_states_pub(self):
         marker_array = MarkerArray()
@@ -168,12 +169,12 @@ class ROSInterface(Node):
         #     self.environment.agent.reset(matrices_only=True)
         # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
         #     pass
-
     def obstacle_callback(self, msg: OccupancyGrid):
         width = msg.info.width
         height = msg.info.height
         resolution = msg.info.resolution
         origin = msg.info.origin
+        print(height, width)
 
         grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
         binary = np.uint8((grid > 50) * 255)
@@ -181,21 +182,91 @@ class ROSInterface(Node):
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         self.static_obstacle_list = []
-
-        for contour in contours:
-            if len(contour) >= 3:
-                polygon = []
-                for pt in contour:
-                    x = pt[0][0] * resolution + origin.position.x
-                    y = pt[0][1] * resolution + origin.position.y
-                    polygon.append((x, y))
+        
+        for i, contour in enumerate(contours):
+            if len(contour) < 3:
+                continue
+                
+            # Calculate area and filter
+            area_pixels = cv2.contourArea(contour)
+            area_world = area_pixels * (resolution ** 2)
+            
+            if area_world < 0.05:
+                continue
+                
+            # Get convex hull (much simpler shape)
+            hull = cv2.convexHull(contour)
+            
+            # Further simplify if needed
+            epsilon = 0.05 * cv2.arcLength(hull, True)
+            simplified = cv2.approxPolyDP(hull, epsilon, True)
+            
+            # Convert to world coordinates
+            polygon = []
+            for pt in simplified:
+                x = pt[0][0] * resolution + origin.position.x
+                y = pt[0][1] * resolution + origin.position.y
+                polygon.append((x, y))
+            
+            if len(polygon) >= 3:
                 self.static_obstacle_list.append(
                     StaticObstacle(
-                        id=len(self.static_obstacle_list),
-                        geometry=Polygon(vertices=polygon)
+                        id=i,
+                        geometry=Polygon(vertices=polygon)  # Use optimized polygon below
                     )
                 )
-        self.environment.static_obstacles = self.static_obstacle_list
+                
+    # def obstacle_callback(self, msg: OccupancyGrid):
+    #     width = msg.info.width
+    #     height = msg.info.height
+    #     resolution = msg.info.resolution
+    #     origin = msg.info.origin
+    #     grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+    #     binary = np.uint8((grid > 50) * 255)
+
+    #     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    #     self.static_obstacle_list = []
+    #     min_obstacle_area = 0.2
+    #     for contour in contours:
+    #         area = cv2.contourArea(contour)
+    #         if area < min_obstacle_area: 
+    #             continue
+                
+    #         # Simplify contour to reduce vertex count
+    #         epsilon = 0.03 * cv2.arcLength(contour, True)  
+    #         simplified = cv2.approxPolyDP(contour, epsilon, True)
+            
+    #         if len(simplified) >= 3:
+    #             polygon = []
+    #             for pt in simplified:
+    #                 x = pt[0][0] * resolution + origin.position.x
+    #                 y = pt[0][1] * resolution + origin.position.y
+    #                 polygon.append((x, y))
+                
+    #             self.static_obstacle_list.append(
+    #                 StaticObstacle(
+    #                     id=len(self.static_obstacle_list),
+    #                     geometry=Polygon(vertices=polygon)
+    #                 )
+    #             )
+        
+        # self.static_obstacle_list = []
+
+        # for contour in contours:
+        #     if len(contour) >= 30:
+        #         polygon = []
+        #         for pt in contour:
+        #             x = pt[0][0] * resolution + origin.position.x
+        #             y = pt[0][1] * resolution + origin.position.y
+        #             polygon.append((x, y))
+        #         self.static_obstacle_list.append(
+        #             StaticObstacle(
+        #                 id=len(self.static_obstacle_list),
+        #                 geometry=Polygon(vertices=polygon)
+        #             )
+        #         )
+        # self.environment.static_obstacles = self.static_obstacle_list
     # def obstacle_callback(self, msg: OccupancyGrid):
     #     if self.counter == 0:
     #         width = msg.info.width
@@ -262,44 +333,68 @@ class ROSInterface(Node):
 
     def waypoint_callback(self, message: Path):
         try:
-            diff = np.array(self.waypoints[-1]) - np.array((
-                message.poses[-1].pose.position.x,
-                message.poses[-1].pose.position.y,
-                euler_from_quaternion([
-                    message.poses[-1].pose.orientation.x,
-                    message.poses[-1].pose.orientation.y,
-                    message.poses[-1].pose.orientation.z,
-                    message.poses[-1].pose.orientation.w,
-                ])[2],
-            ))
+            transform = self.tf_buffer.lookup_transform("odom", "map", rclpy.time.Time())
+        except Exception as e:
+            print(e)
+            return
+        
+        poses = [
+            do_transform_pose_stamped(pose, transform)
+            for pose in message.poses
+        ]
+
+        # Check if the last waypoint is close to the current position
+        try:
+            diff = np.array(self.waypoints[-1]) - np.array(
+                (
+                    poses[-1].pose.position.x,
+                    poses[-1].pose.position.y,
+                    euler_from_quaternion(
+                        [
+                            poses[-1].pose.orientation.x,
+                            poses[-1].pose.orientation.y,
+                            poses[-1].pose.orientation.z,
+                            poses[-1].pose.orientation.w,
+                        ]
+                    )[2],
+                )
+            )
             diff = diff.sum()
-        except:
+        except Exception:
             diff = 0
 
+        # If there are no waypoints or the last waypoint is not close to the current position, update the waypoints
         if self.waypoints == [] or abs(diff) > 0.1:
+            print("Updating goal")
             waypoints = [
                 (
                     pose.pose.position.x,
                     pose.pose.position.y,
-                    euler_from_quaternion([
-                        pose.pose.orientation.x,
-                        pose.pose.orientation.y,
-                        pose.pose.orientation.z,
-                        pose.pose.orientation.w,
-                    ])[2],
+                    euler_from_quaternion(
+                        [
+                            pose.pose.orientation.x,
+                            pose.pose.orientation.y,
+                            pose.pose.orientation.z,
+                            pose.pose.orientation.w,
+                        ]
+                    )[2],
                 )
-                for pose in message.poses[::30]
+                for pose in poses[::30]
             ]
-            waypoints.append((
-                message.poses[-1].pose.position.x,
-                message.poses[-1].pose.position.y,
-                euler_from_quaternion([
-                    message.poses[-1].pose.orientation.x,
-                    message.poses[-1].pose.orientation.y,
-                    message.poses[-1].pose.orientation.z,
-                    message.poses[-1].pose.orientation.w,
-                ])[2],
-            ))
+            waypoints.append(
+                (
+                    poses[-1].pose.position.x,
+                    poses[-1].pose.position.y,
+                    euler_from_quaternion(
+                        [
+                            poses[-1].pose.orientation.x,
+                            poses[-1].pose.orientation.y,
+                            poses[-1].pose.orientation.z,
+                            poses[-1].pose.orientation.w,
+                        ]
+                    )[2],
+                )
+            )
             self.waypoints = waypoints
             self.environment.waypoints = np.array(waypoints)
             self.environment.waypoint_index = 0
