@@ -35,16 +35,16 @@ class ROSInterface(Node):
         self.environment = ROSEnvironment(
             agent=EgoAgent(
                 id=1,
-                radius=0.5,
+                radius=0.4,
                 initial_position=(0, 0),
                 initial_orientation=np.deg2rad(90),
-                horizon=5,
+                horizon=6,
                 use_warm_start=True,
                 planning_time_step=0.8,
-                linear_velocity_bounds=(-0.25, 0.25),
-                angular_velocity_bounds=(-0.25, 0.25),
+                linear_velocity_bounds=(0.0, 0.30),
+                angular_velocity_bounds=(-0.30, 0.30),
                 linear_acceleration_bounds=(-0.5, 0.5),
-                angular_acceleration_bounds=(-1, 1),
+                angular_acceleration_bounds=(-0.5, 0.5),
                 sensor_radius=3,
             ),
             static_obstacles=[],
@@ -72,7 +72,7 @@ class ROSInterface(Node):
         occupancy_map_subscriber = message_filters.Subscriber(
             self, OccupancyGrid, "/local_costmap/costmap"
         )
-        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/wheelchair2_base_controller/odom")
+        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/odom")
 
         time_synchronizer = message_filters.ApproximateTimeSynchronizer(
             [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=1
@@ -169,132 +169,114 @@ class ROSInterface(Node):
         #     self.environment.agent.reset(matrices_only=True)
         # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
         #     pass
-    def obstacle_callback(self, msg: OccupancyGrid):
-        width = msg.info.width
-        height = msg.info.height
-        resolution = msg.info.resolution
-        origin = msg.info.origin
-        print(height, width)
-
-        grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
-        binary = np.uint8((grid > 50) * 255)
-
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        self.static_obstacle_list = []
-        
-        for i, contour in enumerate(contours):
-            if len(contour) < 3:
-                continue
-                
-            # Calculate area and filter
-            area_pixels = cv2.contourArea(contour)
-            area_world = area_pixels * (resolution ** 2)
-            
-            if area_world < 0.05:
-                continue
-                
-            # Get convex hull (much simpler shape)
-            hull = cv2.convexHull(contour)
-            
-            # Further simplify if needed
-            epsilon = 0.05 * cv2.arcLength(hull, True)
-            simplified = cv2.approxPolyDP(hull, epsilon, True)
-            
-            # Convert to world coordinates
-            polygon = []
-            for pt in simplified:
-                x = pt[0][0] * resolution + origin.position.x
-                y = pt[0][1] * resolution + origin.position.y
-                polygon.append((x, y))
-            
-            if len(polygon) >= 3:
-                self.static_obstacle_list.append(
-                    StaticObstacle(
-                        id=i,
-                        geometry=Polygon(vertices=polygon)  # Use optimized polygon below
-                    )
-                )
-                
     # def obstacle_callback(self, msg: OccupancyGrid):
     #     width = msg.info.width
     #     height = msg.info.height
     #     resolution = msg.info.resolution
     #     origin = msg.info.origin
+    #     print(height, width)
+
     #     grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
     #     binary = np.uint8((grid > 50) * 255)
 
     #     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     #     self.static_obstacle_list = []
-    #     min_obstacle_area = 0.2
-    #     for contour in contours:
-    #         area = cv2.contourArea(contour)
-    #         if area < min_obstacle_area: 
+        
+    #     for i, contour in enumerate(contours):
+    #         if len(contour) < 3:
     #             continue
                 
-    #         # Simplify contour to reduce vertex count
-    #         epsilon = 0.03 * cv2.arcLength(contour, True)  
-    #         simplified = cv2.approxPolyDP(contour, epsilon, True)
+    #         # Calculate area and filter
+    #         area_pixels = cv2.contourArea(contour)
+    #         area_world = area_pixels * (resolution ** 2)
             
-    #         if len(simplified) >= 3:
+    #         if area_world < 0.05:
+    #             continue
+                
+    #         # Get convex hull (much simpler shape)
+    #         hull = cv2.convexHull(contour)
+            
+    #         # Further simplify if needed
+    #         epsilon = 0.05 * cv2.arcLength(hull, True)
+    #         simplified = cv2.approxPolyDP(hull, epsilon, True)
+            
+    #         # Convert to world coordinates
+    #         polygon = []
+    #         for pt in simplified:
+    #             x = pt[0][0] * resolution + origin.position.x
+    #             y = pt[0][1] * resolution + origin.position.y
+    #             polygon.append((x, y))
+            
+    #         if len(polygon) >= 3:
+    #             self.static_obstacle_list.append(
+    #                 StaticObstacle(
+    #                     id=i,
+    #                     geometry=Polygon(vertices=polygon)  # Use optimized polygon below
+    #                 )
+    #             )
+                
+    def obstacle_callback(self, msg: OccupancyGrid):
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+        origin = msg.info.origin
+        grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+        binary = np.uint8((grid > 50) * 255)
+
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        self.static_obstacle_list = []
+        min_obstacle_area = 0.3
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_obstacle_area: 
+                continue
+                
+            # Simplify contour to reduce vertex count
+            epsilon = 0.03 * cv2.arcLength(contour, True)  
+            simplified = cv2.approxPolyDP(contour, epsilon, True)
+            
+            if len(simplified) >= 2:
+                polygon = []
+                for pt in simplified:
+                    x = pt[0][0] * resolution + origin.position.x
+                    y = pt[0][1] * resolution + origin.position.y
+                    polygon.append((x, y))
+                
+                self.static_obstacle_list.append(
+                    StaticObstacle(
+                        id=len(self.static_obstacle_list),
+                        geometry=Polygon(vertices=polygon)
+                    )
+                )
+
+    # def obstacle_callback(self, msg: OccupancyGrid):
+    #     width = msg.info.width
+    #     height = msg.info.height
+    #     resolution = msg.info.resolution
+    #     origin = msg.info.origin
+
+    #     grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+    #     binary = np.uint8((grid > 50) * 255)
+
+    #     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    #     self.static_obstacle_list = []
+
+    #     for contour in contours:
+    #         if len(contour) >= 3:
     #             polygon = []
-    #             for pt in simplified:
+    #             for pt in contour:
     #                 x = pt[0][0] * resolution + origin.position.x
     #                 y = pt[0][1] * resolution + origin.position.y
     #                 polygon.append((x, y))
-                
     #             self.static_obstacle_list.append(
     #                 StaticObstacle(
     #                     id=len(self.static_obstacle_list),
     #                     geometry=Polygon(vertices=polygon)
     #                 )
     #             )
-        
-        # self.static_obstacle_list = []
-
-        # for contour in contours:
-        #     if len(contour) >= 30:
-        #         polygon = []
-        #         for pt in contour:
-        #             x = pt[0][0] * resolution + origin.position.x
-        #             y = pt[0][1] * resolution + origin.position.y
-        #             polygon.append((x, y))
-        #         self.static_obstacle_list.append(
-        #             StaticObstacle(
-        #                 id=len(self.static_obstacle_list),
-        #                 geometry=Polygon(vertices=polygon)
-        #             )
-        #         )
-        # self.environment.static_obstacles = self.static_obstacle_list
-    # def obstacle_callback(self, msg: OccupancyGrid):
-    #     if self.counter == 0:
-    #         width = msg.info.width
-    #         height = msg.info.height
-    #         resolution = msg.info.resolution
-    #         origin = msg.info.origin
-
-    #         grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
-    #         binary = np.uint8((grid > 50) * 255)
-
-    #         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    #         self.static_obstacle_list = []
-
-    #         for contour in contours:
-    #             if len(contour) >= 3:
-    #                 polygon = []
-    #                 for pt in contour:
-    #                     x = pt[0][0] * resolution + origin.position.x
-    #                     y = pt[0][1] * resolution + origin.position.y
-    #                     polygon.append((x, y))
-    #                 self.static_obstacle_list.append(
-    #                     StaticObstacle(
-    #                         id=len(self.static_obstacle_list),
-    #                         geometry=Polygon(vertices=polygon)
-    #                     )
-    #                 )
-    #         self.counter += 1
 
 
     # def obstacle_callback(self, message: ObstacleArrayMsg):
@@ -379,7 +361,7 @@ class ROSInterface(Node):
                         ]
                     )[2],
                 )
-                for pose in poses[::30]
+                for pose in poses[::35]
             ]
             waypoints.append(
                 (

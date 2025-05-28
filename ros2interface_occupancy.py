@@ -62,7 +62,7 @@ class ROSInterface(Node):
         occupancy_map_subscriber = message_filters.Subscriber(
             self, OccupancyGrid, "/local_costmap/costmap"
         )
-        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/wheelchair2_base_controller/odom")
+        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/odom")
 
         time_synchronizer = message_filters.ApproximateTimeSynchronizer(
             [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=1
@@ -301,19 +301,19 @@ class ROSInterface(Node):
         if self.waypoints == [] or abs(diff) > 0.1:
             print("Updating goal")
             waypoints = [
-                # (
-                #     pose.pose.position.x,
-                #     pose.pose.position.y,
-                #     euler_from_quaternion(
-                #         [
-                #             pose.pose.orientation.x,
-                #             pose.pose.orientation.y,
-                #             pose.pose.orientation.z,
-                #             pose.pose.orientation.w,
-                #         ]
-                #     )[2],
-                # )
-                # for pose in message.poses[::30]
+                (
+                    pose.pose.position.x,
+                    pose.pose.position.y,
+                    euler_from_quaternion(
+                        [
+                            pose.pose.orientation.x,
+                            pose.pose.orientation.y,
+                            pose.pose.orientation.z,
+                            pose.pose.orientation.w,
+                        ]
+                    )[2],
+                )
+                for pose in poses[::30]
             ]
             waypoints.append(
                 (

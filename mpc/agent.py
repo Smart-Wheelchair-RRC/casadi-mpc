@@ -167,7 +167,7 @@ class EgoAgent(Agent):
             angular_velocity_bounds=self.angular_velocity_bounds,
             linear_acceleration_bounds=self.linear_acceleration_bounds,
             angular_acceleration_bounds=self.angular_acceleration_bounds,
-            inflation_radius=(self.geometry.radius + 0.4),
+            inflation_radius=(self.geometry.radius + 0.01),
             static_obstacles=static_obstacles,
             dynamic_obstacles=dynamic_obstacles,
         )

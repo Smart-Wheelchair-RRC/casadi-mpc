@@ -295,7 +295,7 @@ class MotionPlanner:
             return MX_horzcat(
                 *[
                     obstacle.calculate_symbolic_matrix_distance(
-                        symbolic_states_matrix=self.symbolic_states_matrix[:, 1:]
+                        symbolic_states_matrix=self.symbolic_states_matrix[:, 1:] #
                     )
                     for obstacle in all_obstacles
                 ]
