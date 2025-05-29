@@ -176,10 +176,10 @@ class ROSEnvironment(Environment):
     def step(self):
         if self.waypoint_index == len(self.waypoints) - 1:
             print("Heading for final goal")
-            self.agent.goal_radius = 0.5
+            self.agent.goal_radius = 0.9
             # self.agent.planner.update_orientation_weight(100)
         else:
-            self.agent.goal_radius = 0.5
+            self.agent.goal_radius = 0.9
             # self.agent.planner.update_orientation_weight(0)
 
         if self.final_goal_reached:

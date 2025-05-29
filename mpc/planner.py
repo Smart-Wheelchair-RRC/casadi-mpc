@@ -69,8 +69,8 @@ class MotionPlanner:
         # Weight matrix for goal cost
         self.weight_matrix = ca.DM(ca.diagcat(100, 100, 0))
 
-        self.angular_acceleration_weight = ca.DM(30)
-        self.linear_acceleration_weight = ca.DM(50)
+        self.angular_acceleration_weight = ca.DM(35)
+        self.linear_acceleration_weight = ca.DM(65)
         # Obstacle cost weight
         # self.obstacle_cost_weight = ca.DM(10000)
 
