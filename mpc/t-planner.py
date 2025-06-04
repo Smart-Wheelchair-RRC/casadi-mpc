@@ -148,7 +148,7 @@ class MotionPlanner:
         )
 
     def _get_symbolic_reverse_velocity_cost(self) -> ca.MX:
-        return self.reverse_velocity_weight * ca.sum1(self.sym)
+        return self.reverse_velocity_weight * ca.sum1(self.symbolic_delta_matrix)
 
     def _get_symbolic_costs(
         self,
@@ -448,7 +448,8 @@ class MotionPlanner:
     def _get_symbolic_reverse_velocity_contraints(
         self, current_linear_velocity: float
     ) -> ca.MX:
-        symbolic_linear_velocities = self._get_angular_velocity_constraints_bounds(
+        # FIX: Use the correct method for getting symbolic linear velocities
+        symbolic_linear_velocities = self._get_symbolic_linear_velocity_constraints(
             current_linear_velocity
         )
         return self.symbolic_delta_matrix + symbolic_linear_velocities
