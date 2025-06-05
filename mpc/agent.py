@@ -153,8 +153,8 @@ class EgoAgent(Agent):
         ] = [],
         state_override: bool = False,
     ):
-        # if not self.use_warm_start:
-        #     self.reset(matrices_only=True, to_initial_state=False)
+        if not self.use_warm_start:
+            self.reset(matrices_only=True, to_initial_state=False)
         self.states_matrix, self.controls_matrix = self.planner.solve(
             current_state=self.state if not state_override else self.initial_state,
             current_linear_velocity=self.linear_velocity,
