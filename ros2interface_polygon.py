@@ -5,6 +5,7 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 import tf2_ros
+
 from tf2_geometry_msgs import do_transform_pose_stamped
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -35,13 +36,13 @@ class ROSInterface(Node):
         self.environment = ROSEnvironment(
             agent=EgoAgent(
                 id=1,
-                radius=0.4,
+                radius=0.45,
                 initial_position=(0, 0),
                 initial_orientation=np.deg2rad(90),
-                horizon=5,
+                horizon=6,
                 use_warm_start=True,
                 planning_time_step=0.8,
-                linear_velocity_bounds=(-0.1, 0.35),
+                linear_velocity_bounds=(-0.1, 0.3),
                 angular_velocity_bounds=(-0.30, 0.30),
                 linear_acceleration_bounds=(-0.5, 0.5),
                 angular_acceleration_bounds=(-0.5, 0.5),
@@ -70,7 +71,7 @@ class ROSInterface(Node):
         # self.create_subscription(Odometry, '/wheelchair2_base_controller/odom', self.odom_callback, 10)
 
         occupancy_map_subscriber = message_filters.Subscriber(
-            self, OccupancyGrid, "/local_costmap/costmap"
+            self, OccupancyGrid, "/local_cstmap/costmap"
         )
         odometry_subscriber = message_filters.Subscriber(self, Odometry, "/odom")
 
@@ -99,7 +100,10 @@ class ROSInterface(Node):
         if not self.waypoints:
             return
         self.environment.static_obstacles = self.static_obstacle_list
+        
+        
         self.environment.step()
+        
         self.future_states_pub()
 
         control_command = Twist()

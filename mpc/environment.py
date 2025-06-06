@@ -1,7 +1,9 @@
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Tuple
-
+# import cProfile
+# import pstats
+# import io
 import numpy as np
 
 if TYPE_CHECKING:
@@ -174,6 +176,9 @@ class ROSEnvironment(Environment):
             )
 
     def step(self):
+        # profiler = cProfile.Profile()
+        # print("Starting profiling of planner.solve()...")
+        # profiler.enable()
         if self.waypoint_index == len(self.waypoints) - 1:
             print("Heading for final goal")
             self.agent.goal_radius = 0.9
@@ -233,6 +238,14 @@ class ROSEnvironment(Environment):
             print("Reached waypoint", self.waypoint_index + 1)
             self.waypoint_index += 1
             self.agent.update_goal(self.current_waypoint)
+        # profiler.disable()
+        # print("Profiling finished.")
+        # s = io.StringIO()
+        # sortby = pstats.SortKey.CUMULATIVE 
+        # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
+        # print("\n--- Profiling Statistics (Sorted by Cumulative Time) ---")
+        # ps.print_stats(20)
+        # print(s.getvalue())
 
     def reset(self):
         self.agent.reset()
