@@ -71,7 +71,7 @@ class ROSInterface(Node):
         # self.create_subscription(Odometry, '/wheelchair2_base_controller/odom', self.odom_callback, 10)
 
         occupancy_map_subscriber = message_filters.Subscriber(
-            self, OccupancyGrid, "/local_cstmap/costmap"
+            self, OccupancyGrid, "/local_costmap/costmap"
         )
         odometry_subscriber = message_filters.Subscriber(self, Odometry, "/odom")
 
