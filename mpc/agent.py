@@ -33,7 +33,7 @@ class Agent(ABC):
         left_right_lane_bounds: Tuple[float, float],
         goal_position: Tuple[float, float] = None,
         goal_orientation: float = None,
-        use_warm_start: bool = False,
+        use_warm_start: bool = True,
     ):
         assert horizon > 0, "Horizon must be greater than 0"
 
@@ -155,9 +155,6 @@ class EgoAgent(Agent):
         ] = [],
         state_override: bool = False,
     ):
-        # profiler = cProfile.Profile()
-        # print("Starting profiling of planner.solve()...")
-        # profiler.enable()
         # if not self.use_warm_start:
         #     self.reset(matrices_only=True, to_initial_state=False)
         self.states_matrix, self.controls_matrix = self.planner.solve(
@@ -179,11 +176,4 @@ class EgoAgent(Agent):
         self.geometry.location = self.state[:2] if not state_override else self.initial_state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
         self.angular_velocity += self.controls_matrix[1, 0] * self.time_step
-        # profiler.disable()
-        # print("Profiling finished.")
-        # s = io.StringIO()
-        # sortby = pstats.SortKey.CUMULATIVE 
-        # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
-        # print("\n--- Profiling Statistics (Sorted by Cumulative Time) ---")
-        # ps.print_stats(20)
-        # print(s.getvalue())
+
