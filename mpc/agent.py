@@ -151,11 +151,12 @@ class EgoAgent(Agent):
         dynamic_obstacles: List[
             Union["DynamicObstacle", "SimulatedDynamicObstacle"]
         ] = [],
+        state_override: bool = False,
     ):
-        if not self.use_warm_start:
-            self.reset(matrices_only=True, to_initial_state=False)
+        # if not self.use_warm_start:
+        #     self.reset(matrices_only=True, to_initial_state=False)
         self.states_matrix, self.controls_matrix = self.planner.solve(
-            current_state=self.state,
+            current_state=self.state if not state_override else self.initial_state,
             current_linear_velocity=self.linear_velocity,
             current_angular_velocity=self.angular_velocity,
             goal_state=self.goal_state,
@@ -170,6 +171,6 @@ class EgoAgent(Agent):
             static_obstacles=static_obstacles,
             dynamic_obstacles=dynamic_obstacles,
         )
-        self.geometry.location = self.state[:2]
+        self.geometry.location = self.state[:2] if not state_override else self.initial_state[:2]
         self.linear_velocity += self.controls_matrix[0, 0] * self.time_step
         self.angular_velocity += self.controls_matrix[1, 0] * self.time_step

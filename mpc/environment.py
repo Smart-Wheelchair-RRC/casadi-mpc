@@ -182,8 +182,8 @@ class ROSEnvironment(Environment):
             self.agent.goal_radius = 0.5
             # self.agent.planner.update_orientation_weight(0)
 
-        # if self.final_goal_reached:
-        #     print("Final Goal Reached")
+        if self.final_goal_reached:
+            print("Final Goal Reached")
         #     self.agent.planner.update_orientation_weight(100)
         # else:
         #     self.agent.planner.update_orientation_weight(0)
@@ -196,7 +196,8 @@ class ROSEnvironment(Environment):
         filtered_static_obstacles = [
             static_obstacles_dict[distance]
             for distance in sorted(static_obstacles_dict.keys())
-            if distance <= self.agent.sensor_radius
+            if True
+            # if distance <= self.agent.sensor_radius
         ]
         dynamic_obstacles_dict = {
             obstacle.calculate_distance(self.agent.state): obstacle
@@ -208,10 +209,12 @@ class ROSEnvironment(Environment):
             if distance <= self.agent.sensor_radius
         ]
         print("Number of Dyn Obstacles:", len(filtered_dynamic_obstacles))
+        print("Number of Static Obstacles:", len(filtered_static_obstacles))
 
         self.agent.step(
-            static_obstacles=filtered_static_obstacles[:4],
+            static_obstacles=filtered_static_obstacles,
             dynamic_obstacles=filtered_dynamic_obstacles,
+            state_override = True,
         )
 
         t2 = time.perf_counter()
@@ -219,7 +222,7 @@ class ROSEnvironment(Environment):
 
         if self.plot:
             self.plotter.update_plot(self.waypoints)
-            self.plotter.update_static_obstacles(filtered_dynamic_obstacles)
+            self.plotter.update_static_obstacles(filtered_static_obstacles)
 
         print("Current Waypoint", self.current_waypoint)
         print("Waypoints", self.waypoints)

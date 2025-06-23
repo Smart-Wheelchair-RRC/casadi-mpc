@@ -79,5 +79,5 @@ environment = LocalEnvironment(
     ],
     # save_video=True,
 )
-# environment.view_environment()
+environment.view_environment()
 environment.loop()

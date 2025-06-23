@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, cast
-
+import time
 import casadi as ca
 import numpy as np
 
@@ -50,14 +50,19 @@ class StaticObstacle(Obstacle):
         )
 
     def calculate_symbolic_matrix_distance(self, symbolic_states_matrix: ca.MX):
-        return cast(
-            ca.MX,
-            ca.vertcat(
-                *[
-                    self.geometry.calculate_symbolic_distance(
-                        symbolic_states_matrix[:2, time_step]
-                    )
-                    for time_step in range(symbolic_states_matrix.shape[1])
-                ]
-            ),
+        start_time = time.time() 
+
+        result = ca.vertcat(
+            *[
+                self.geometry.calculate_symbolic_distance(
+                    symbolic_states_matrix[:2, time_step]
+                )
+                for time_step in range(symbolic_states_matrix.shape[1])
+            ]
         )
+
+        duration = time.time() - start_time 
+
+        print(f"Symbolic distance generation took: {duration:.6f} seconds")
+
+        return cast(ca.MX, result)

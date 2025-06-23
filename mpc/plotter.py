@@ -31,7 +31,7 @@ class Plotter:
 
         self.num_frames = 0
 
-        self.PLOT_SIZE_DELTA = 10
+        self.PLOT_SIZE_DELTA = 4
 
         # Create the plot
         _, axes = plt.subplots()
@@ -194,9 +194,9 @@ class Plotter:
         self.agent.geometry.update_patch(self.agent_patch)
 
         self.agent_id.set_position((self.agent.state[0], self.agent.state[1]))
-        self.agent_id.set_text(
-            f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})"
-        )
+        # self.agent_id.set_text(
+        #     f"Agent ({self.agent.state[0]:.2f}, {self.agent.state[1]:.2f})"
+        # )
 
         for index, obstacle in enumerate(self.dynamic_obstacles):
             self.dynamic_obstacle_ids[index].set_position(
@@ -267,15 +267,15 @@ class Plotter:
             self.obstacle_patches.append(
                 plt.gca().add_patch(obstacle.geometry.create_patch())
             )
-            self.obstacle_plots.append(
-                plt.gca().plot(
-                    obstacle.states_matrix[0, 1:],
-                    obstacle.states_matrix[1, 1:],
-                    marker=".",
-                    color="green",
-                    # s=1.5,
-                )[0]
-            )
+            # self.obstacle_plots.append(
+            #     plt.gca().plot(
+            #         obstacle.states_matrix[0, 1:],
+            #         obstacle.states_matrix[1, 1:],
+            #         marker=".",
+            #         color="green",
+            #         # s=1.5,
+            #     )[0]
+            # )
 
         # for index, obstacle in enumerate(self.static_obstacles):
         # self.static_obstacle_ids[index].set_position(
