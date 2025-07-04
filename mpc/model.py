@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Tuple, Union
+from typing import TYPE_CHECKING, List, Tuple
 import numpy as np
-
+import time
+from pathlib import Path
 from mpc.geometry import Circle
 from mpc.optimizer import MotionPlanner
 
@@ -21,10 +22,14 @@ class Model(ABC):
         state_bounds: Tuple[float, float] = (-10, 10),
         goal_position: Tuple[float, float] = None,
         goal_orientation: float = None,
+        waypoints: List[Tuple[Tuple, float]] = None,
         use_warm_start: bool = False,
+        
     ):
         assert horizon > 0
-        
+        self.waypoints = waypoints
+        self.waypoint_index = 0
+        self.update_goal(self.current_waypoint)
         self.id = id
         self.geometry = Circle(center=initial_position, radius=radius)
 
@@ -55,7 +60,16 @@ class Model(ABC):
         
         self.use_warm_start = use_warm_start
         self.goal_radius = 0.5
-        
+    
+    def current_waypoint(self):
+        return (
+            self.waypoints[self.waypoint_index]
+            if self.waypoint_index < len(self.waypoints)
+            else None
+        )
+    def final_goal_reached(self):
+        return self.waypoint_index == len(self.waypoints) - 1 and self.at_goal
+    
     def update_goal(self, goal: np.ndarray):
         self.goal_state = goal if (goal is not None) else self.initial_state
         
@@ -78,6 +92,12 @@ class Model(ABC):
         self,
         state_override: bool = False,
     ):
+        print("step function is running")
+        if self.at_goal and not self.final_goal_reached:
+            print("Reached waypoint", self.waypoint_index + 1)
+            self.waypoint_index += 1
+            self.update_goal(self.current_waypoint)
+            
         self.states_matrix, self.controls_matrix = self.planner.solve(
             current_state=self.state if not state_override else self.initial_state,
             current_linear_velocity=self.linear_velocity,

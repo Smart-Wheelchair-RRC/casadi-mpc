@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import message_filters
 import numpy as np
 import rclpy
@@ -16,7 +15,6 @@ from scipy.spatial.transform import (
 )
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
-from mpc.model import Model
 
 from mpc.agent import EgoAgent
 from mpc.environment import ROSEnvironment
@@ -25,51 +23,89 @@ from mpc.obstacle import StaticObstacle
 import cv2
 from mpc.geometry import Polygon
 
+
+
 def euler_from_quaternion(quat, degree = False):
     return R.from_quat(quat).as_euler('xyz')
 
-class ROS2Interface(Node):
+class ROSInterface(Node):
     def __init__(self):
         super().__init__('ros_mpc_interface')
-        
-        self.model = Model(
-            id = 1,
-            radius=0.5,
-            initial_position=(0, 0),
-            initial_orientation=np.deg2rad(90),
-            horizon=7,
-            use_warm_start=True,
-            planning_time_step=0.8,
-            linear_velocity_bounds=(0, 0.5),
-            angular_velocity_bounds=(-0.5, 0.5),
+
+        self.environment = ROSEnvironment(
+            agent=EgoAgent(
+                id=1,
+                radius=0.5,
+                initial_position=(0, 0),
+                initial_orientation=np.deg2rad(90),
+                horizon=7,
+                use_warm_start=True,
+                planning_time_step=0.8,
+                linear_velocity_bounds=(0, 0.3),
+                angular_velocity_bounds=(-0.5, 0.5),
+                linear_acceleration_bounds=(-0.5, 0.5),
+                angular_acceleration_bounds=(-1, 1),
+                sensor_radius=3,
+            ),
+            static_obstacles=[],
+            dynamic_obstacles=[],
             waypoints=[],
+            plot=True,
         )
-        
         self.counter = 0
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.waypoints=[]
-        
+
+
+        #SUBSCRIBERS
         self.create_subscription(Path, '/plan', self.waypoint_callback, 10)
-        self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
-        
+
+        occupancy_map_subscriber = message_filters.Subscriber(
+            self, OccupancyGrid, "/local_costmap/costmap"
+        )
+        odometry_subscriber = message_filters.Subscriber(self, Odometry, "/odom")
+
+        time_synchronizer = message_filters.ApproximateTimeSynchronizer(
+            [occupancy_map_subscriber, odometry_subscriber], queue_size=1, slop=1
+        )
+        time_synchronizer.registerCallback(self.planning_callback)
+
+
+        # PUBLISHERS    
         self.velocity_publisher = self.create_publisher(Twist, '/wheelchair2_base_controller/cmd_vel_unstamped', 10)
         self.marker_publisher = self.create_publisher(MarkerArray, '/future_states', 10)
-        
+
+        self.static_obstacle_list = []
+        self.waypoints = []
+
+        self.timer = self.create_timer(0.01, self.run)
+
+    def planning_callback(
+            self, occupancy_map_msg: OccupancyGrid, odometry_msg: Odometry
+    ):
+        self.obstacle_callback(occupancy_map_msg)
+        self.odom_callback(odometry_msg)
+
     def run(self):
         if not self.waypoints:
             return
-        self.model.step()
+        self.environment.static_obstacles = self.static_obstacle_list
+        
+        
+        self.environment.step()
+        
         self.future_states_pub()
-        
+
         control_command = Twist()
-        control_command.linear.x = self.model.linear_velocity
-        control_command.angular.z = self.model.angular_velocity
+        control_command.linear.x = self.environment.agent.linear_velocity
+        control_command.angular.z = self.environment.agent.angular_velocity
+
         self.velocity_publisher.publish(control_command)
-        
+
     def future_states_pub(self):
         marker_array = MarkerArray()
-        future_states = self.model.states_matrix
+        future_states = self.environment.agent.states_matrix
         for i, state in enumerate(future_states.T):
             marker = Marker()
             marker.header.frame_id = "map"
@@ -94,10 +130,10 @@ class ROS2Interface(Node):
             marker_array.markers.append(marker)
 
         self.marker_publisher.publish(marker_array)
-        
+
     def odom_callback(self, message: Odometry):
         pose = message.pose.pose
-        self.model.initial_state = np.array(
+        self.environment.agent.initial_state = np.array(
             [
                 pose.position.x,
                 pose.position.y,
@@ -111,8 +147,43 @@ class ROS2Interface(Node):
                 )[2],
             ]
         )
-        self.model.reset(matrices_only=True)
-        
+        self.environment.agent.reset(matrices_only=True)
+         
+    def obstacle_callback(self, msg: OccupancyGrid):
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+        origin = msg.info.origin
+        grid = np.array(msg.data, dtype=np.int8).reshape((height, width))
+        binary = np.uint8((grid > 50) * 255)
+
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        self.static_obstacle_list = []
+        min_obstacle_area = 0.3
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_obstacle_area: 
+                continue
+                
+            # Simplify contour to reduce vertex count
+            epsilon = 0.03 * cv2.arcLength(contour, True)  
+            simplified = cv2.approxPolyDP(contour, epsilon, True)
+            
+            if len(simplified) >= 2:
+                polygon = []
+                for pt in simplified:
+                    x = pt[0][0] * resolution + origin.position.x
+                    y = pt[0][1] * resolution + origin.position.y
+                    polygon.append((x, y))
+                
+                self.static_obstacle_list.append(
+                    StaticObstacle(
+                        id=len(self.static_obstacle_list),
+                        geometry=Polygon(vertices=polygon)
+                    )
+                )
+                
     def waypoint_callback(self, message: Path):
         try:
             transform = self.tf_buffer.lookup_transform("odom", "map", rclpy.time.Time())
@@ -176,13 +247,13 @@ class ROS2Interface(Node):
                 )
             )
             self.waypoints = waypoints
-            self.model.waypoints = np.array(waypoints)
-            self.model.waypoint_index = 0
-            self.model.update_goal(self.model.current_waypoint)
+            self.environment.waypoints = np.array(waypoints)
+            self.environment.waypoint_index = 0
+            self.environment.agent.update_goal(self.environment.current_waypoint)
 
 def main(args=None):
     rclpy.init(args=args)
-    ros_interface = ROS2Interface()
+    ros_interface = ROSInterface()
     rclpy.spin(ros_interface)
     ros_interface.destroy_node()
     rclpy.shutdown()
