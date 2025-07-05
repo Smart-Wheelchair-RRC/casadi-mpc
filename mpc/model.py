@@ -10,14 +10,13 @@ class Model(ABC):
     def __init__(
         self,
         id: int,
-        radius: float,
         initial_position: Tuple[float, float],
         initial_orientation: float,
-        planning_time_step: float = 0.041,
-        horizon: int = 50,
+        planning_time_step: float = 0.8,
+        horizon: int = 7,
         initial_linear_velocity: float = 0,
         initial_angular_velocity: float = 0,
-        linear_velocity_bounds: Tuple[float, float] = (0, 0.3), #change
+        linear_velocity_bounds: Tuple[float, float] = (0, 0.3), 
         angular_velocity_bounds: Tuple[float, float] = (-0.3, 0.3),
         state_bounds: Tuple[float, float] = (-10, 10),
         goal_position: Tuple[float, float] = None,
@@ -31,7 +30,6 @@ class Model(ABC):
         self.waypoint_index = 0
         
         self.id = id
-        self.geometry = Circle(center=initial_position, radius=radius)
 
         self.initial_state = np.array([*initial_position, initial_orientation])
         self.goal_state = (
@@ -125,11 +123,6 @@ class Model(ABC):
             linear_velocity_bounds=self.linear_velocity_bounds,
             angular_velocity_bounds=self.angular_velocity_bounds,
         )
-
-        if not state_override:
-            self.geometry.location = self.state()[:2]
-        else:
-            self.geometry.location = self.initial_state[:2]
             
         self.linear_velocity = self.controls_matrix[0, 0]
         self.angular_velocity = self.controls_matrix[1, 0]

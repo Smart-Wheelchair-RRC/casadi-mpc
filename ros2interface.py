@@ -34,14 +34,13 @@ class ROS2Interface(Node):
         
         self.model = Model(
             id = 1,
-            radius=0.5,
             initial_position=(0, 0),
             initial_orientation=np.deg2rad(90),
             horizon=7,
             use_warm_start=True,
             planning_time_step=0.8,
-            linear_velocity_bounds=(0, 0.5),
-            angular_velocity_bounds=(-0.5, 0.5),
+            linear_velocity_bounds=(0, 0.3),
+            angular_velocity_bounds=(-0.3, 0.3),
             waypoints=[],
         )
         
