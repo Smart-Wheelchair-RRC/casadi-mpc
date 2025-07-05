@@ -103,8 +103,8 @@ class MotionPlanner:
     def get_state_bounds(
         self, state_bounds: Tuple[float, float]
     ) -> Tuple[ca.DM, ca.DM]:
-        state_lower_bounds = ca.repmat(DM_vertcat(state_bounds[0], -ca.inf, -ca.inf), (1, self.horizon +1),),
-        state_upper_bounds = ca.repmat(DM_vertcat(state_bounds[1], -ca.inf, -ca.inf), (1, self.horizon +1),),
+        state_lower_bounds = ca.repmat(DM_vertcat(state_bounds[0], -ca.inf, -ca.inf), (1, self.horizon +1),)
+        state_upper_bounds = ca.repmat(DM_vertcat(state_bounds[1], ca.inf, ca.inf), (1, self.horizon +1),)
         return state_lower_bounds, state_upper_bounds
     
     def get_control_bounds(
@@ -155,7 +155,7 @@ class MotionPlanner:
     def get_symbolic_state_constrains(
         self, 
         current_linear_velocity: float, 
-    current_angular_velocity: float) -> ca.MX:
+        current_angular_velocity: float) -> ca.MX:
 
             current_velocities = self.symbolic_controls_matrix
             
@@ -203,8 +203,8 @@ class MotionPlanner:
     
     def get_constraints_bounds(
         self,
-        # linelinear_velocity_bounds: Tuple[float, float],
-        # angular_velocity_bounds: Tuple[float, float],
+        linear_velocity_bounds: Tuple[float, float],
+        angular_velocity_bounds: Tuple[float, float],
         # inflation_radius: float = 0
     ) -> Tuple[ca.DM, ca.DM]:
         (

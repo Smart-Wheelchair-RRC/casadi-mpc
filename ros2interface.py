@@ -55,10 +55,11 @@ class ROS2Interface(Node):
         
         self.velocity_publisher = self.create_publisher(Twist, '/wheelchair2_base_controller/cmd_vel_unstamped', 10)
         self.marker_publisher = self.create_publisher(MarkerArray, '/future_states', 10)
-        
+        self.timer = self.create_timer(0.01, self.run)
     def run(self):
         if not self.waypoints:
             return
+        print("run function is running")
         self.model.step()
         self.future_states_pub()
         
@@ -178,11 +179,12 @@ class ROS2Interface(Node):
             self.waypoints = waypoints
             self.model.waypoints = np.array(waypoints)
             self.model.waypoint_index = 0
-            self.model.update_goal(self.model.current_waypoint)
+            self.model.update_goal(self.model.current_waypoint())
 
 def main(args=None):
     rclpy.init(args=args)
     ros_interface = ROS2Interface()
+    # ros_interface.run()
     rclpy.spin(ros_interface)
     ros_interface.destroy_node()
     rclpy.shutdown()
